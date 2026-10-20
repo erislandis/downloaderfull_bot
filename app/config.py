@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -22,11 +23,28 @@ _REQUIRED = (
 _TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{25,}$")
 _HASH_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _PLACEHOLDER_RE = re.compile(r"^(pon_aqui|tu_api|tu_token|tu_string|xxx|change_?me)", re.IGNORECASE)
+# Telegram exige que secret_token solo lleve estos caracteres (1-256)
+_TELEGRAM_SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 _DEFAULT_BUFFER_MB = 4.0
 
 
 def _placeholder(value: str) -> bool:
     return bool(_PLACEHOLDER_RE.match(value.strip()))
+
+
+def normalize_webhook_secret(value: str) -> str:
+    """Adecua un secret al formato que Telegram acepta en ``secret_token``.
+
+    El valor que genera Render (``generateValue: true``) puede incluir caracteres
+    fuera de ``[A-Za-z0-9_-]`` y Telegram rechaza el webhook con
+    "secret token contains illegal characters". Si el valor ya es válido se deja
+    igual; si no, se deriva de forma determinista (SHA-256 hex), de modo que el
+    registro del webhook y la validación posterior usen siempre el mismo secret.
+    """
+    value = value.strip()
+    if _TELEGRAM_SECRET_RE.match(value):
+        return value
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -79,6 +97,7 @@ class Settings:
             raise RuntimeError("ALLOWED_USER_IDS debe ser una lista de números separados por comas.") from None
 
         base = env.get("WEBHOOK_BASE_URL") or env.get("RENDER_EXTERNAL_URL")
+        secret = (env.get("WEBHOOK_SECRET") or "").strip()
         return cls(
             bot_token=env["BOT_TOKEN"].strip(),
             telegram_api_id=api_id,
@@ -86,7 +105,7 @@ class Settings:
             telegram_session=env["TELEGRAM_SESSION"].strip(),
             allowed_user_ids=allowed,
             webhook_base_url=base.rstrip("/") if base else None,
-            webhook_secret=env.get("WEBHOOK_SECRET") or None,
+            webhook_secret=normalize_webhook_secret(secret) if secret else None,
             bot_api_max_bytes=int(float(env.get("BOT_API_MAX_MB", "50")) * 1024 * 1024),
             max_file_bytes=int(float(env.get("MAX_FILE_MB", "2048")) * 1024 * 1024),
             buffer_size=buffer,
