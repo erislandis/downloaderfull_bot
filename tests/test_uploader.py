@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from app.config import Settings
 from app.errors import UploadError
-from app.sources.base import RemoteFile
+from app.sources.base import BundleFile, RemoteFile
 from app.uploader import TelegramUploader
 
 
@@ -98,7 +98,8 @@ def test_archivo_grande_usa_mtproto_y_reenvia():
     asyncio.run(go())
 
 
-def test_tamano_desconocido_va_por_mtproto():
+def test_tamano_desconocido_va_a_fichero_temporal():
+    """Sin tamaño conocido telethon leería el archivo entero en RAM: se escribe en disco."""
     async def go():
         bot = FakeBot()
         up = TelegramUploader(make_settings(), bot)
@@ -107,15 +108,79 @@ def test_tamano_desconocido_va_por_mtproto():
         up._client = FakeMTProtoClient()
         up._me_id = 999
         used: list[bool] = []
+        captured: dict[str, bytes] = {}
 
-        async def fake_run_upload(reader, remote):
+        async def fake_run_upload_path(path, remote, size):
             used.append(True)
-            await asyncio.to_thread(reader.readall)
+            captured["data"] = await asyncio.to_thread(lambda: open(path, "rb").read())
+            captured["size"] = size
             return FakeMessage(1)
 
-        up._run_upload = fake_run_upload
+        up._run_upload_path = fake_run_upload_path
         await up.upload(FakeSource(b"x" * 10), RemoteFile("f.bin", None, "ref"), chat_id=1)
         assert used == [True]
+        assert captured["data"] == b"x" * 10
+        assert captured["size"] == 10
+    asyncio.run(go())
+
+
+def test_zip_pequeno_va_por_la_bot_api():
+    async def go():
+        bot = FakeBot()
+        up = TelegramUploader(make_settings(bot_api_max_bytes=100_000), bot)
+        bundle = BundleFile(
+            name="carpeta.zip",
+            size=10,
+            ref="bundle:x",
+            members=(RemoteFile("a.txt", 5, "r1", path="carpeta/a.txt"),),
+        )
+        total = await up.upload(FakeSource(b"datos-zip"), bundle, chat_id=7)
+        assert total == len(b"datos-zip")
+        (chat_id, document, _), = bot.sent
+        assert chat_id == 7 and document.filename == "carpeta.zip"
+    asyncio.run(go())
+
+
+def test_zip_grande_se_escribe_en_disco_y_se_borra():
+    async def go():
+        bot = FakeBot()
+        up = TelegramUploader(make_settings(bot_api_max_bytes=1, max_file_bytes=10_000_000), bot)
+        loop = asyncio.get_running_loop()
+        up._main = up._loop = loop
+        up._client = FakeMTProtoClient()
+        up._me_id = 999
+        captured: dict[str, object] = {}
+
+        async def fake_run_upload_path(path, remote, size):
+            captured["path"] = path
+            captured["size"] = size
+            captured["data"] = await asyncio.to_thread(lambda: open(path, "rb").read())
+            return FakeMessage(7)
+
+        up._run_upload_path = fake_run_upload_path
+        bundle = BundleFile(
+            name="carpeta.zip",
+            size=9,
+            ref="bundle:x",
+            members=(RemoteFile("a.txt", 9, "r1", path="carpeta/a.txt"),),
+        )
+        total = await up.upload(FakeSource(b"datos-zip"), bundle, chat_id=7)
+        assert total == 9 and captured["size"] == 9
+        assert captured["data"] == b"datos-zip"
+        assert bot.forwarded == [(7, 999, 7)]
+        assert not os.path.exists(str(captured["path"]))  # el temporal se borra
+    asyncio.run(go())
+
+
+def test_zip_demasiado_grande_se_rechaza_antes_de_empezar():
+    async def go():
+        up = TelegramUploader(make_settings(bot_api_max_bytes=10, max_file_bytes=100), FakeBot())
+        bundle = BundleFile(name="c.zip", size=5000, ref="bundle:x", members=())
+        try:
+            await up.upload(FakeSource(b"x"), bundle, chat_id=1)
+        except UploadError:
+            return
+        raise AssertionError("debía rechazar el ZIP por tamaño")
     asyncio.run(go())
 
 

@@ -90,3 +90,107 @@ def test_muestra_aviso_mientras_espera_el_reintento():
         await mgr._run(make_job())
         assert any("Reintento" in e for e in bot.messages[0].edits)
     asyncio.run(go())
+
+
+# -- el trabajo sigue aunque el usuario se desconecte ---------------------------------------
+
+
+class OfflineBot(FakeBot):
+    """El chat del usuario no admite mensajes (se desconectó o bloqueó al bot)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.errors = 0
+
+    async def send_message(self, chat_id, text, **kwargs):
+        self.errors += 1
+        raise RuntimeError("chat not available")
+
+
+def test_la_subida_sigue_aunque_no_se_pueda_avisar_al_usuario():
+    """Si el chat no admite mensajes (usuario desconectado), el archivo se sube igual."""
+
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        await mgr._run(make_job())
+        assert uploader.calls == 1  # se subió a pesar del fallo del aviso
+    asyncio.run(go())
+
+
+def test_el_trabajo_se_registra_como_entregado():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        job = make_job()
+        await mgr._run(job)
+        assert job.state == "done"
+        status = mgr.user_status(job.user_id)
+        assert status[0]["name"] == "a.bin"
+        assert status[0]["state"] == "done"
+        assert status[0]["active"] is False
+    asyncio.run(go())
+
+
+def test_el_estado_muestra_los_trabajos_en_cola():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        job = make_job()
+        mgr.submit(job)
+        status = mgr.user_status(job.user_id)
+        assert status[0]["state"] == "queued"
+        assert status[0]["active"] is True
+    asyncio.run(go())
+
+
+def test_el_estado_es_por_usuario():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        job = make_job()
+        mgr.submit(job)
+        assert mgr.user_status(999) == []
+    asyncio.run(go())
+
+
+def test_el_historial_se_limita():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        for _ in range(10):
+            job = make_job()
+            await mgr._run(job)
+        assert len(mgr.user_status(job.user_id)) <= 5
+    asyncio.run(go())
+
+
+def test_un_trabajo_entregado_no_aparece_dos_veces():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        job = make_job()
+        mgr.submit(job)
+        await mgr._run(job)
+        status = mgr.user_status(job.user_id)
+        names = [str(i["name"]) for i in status]
+        assert names.count("a.bin") == 1
+    asyncio.run(go())
+
+
+def test_la_cola_sigue_viva_despues_de_entregar():
+    """El bucle de trabajos no se detiene tras un trabajo: el siguiente entra solo."""
+
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, bot = make_manager(uploader)
+        task = asyncio.create_task(mgr.run_forever())
+        job = make_job()
+        mgr.submit(job)
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if uploader.calls:
+                break
+        assert uploader.calls == 1
+        task.cancel()
+    asyncio.run(go())

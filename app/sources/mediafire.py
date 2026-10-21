@@ -11,7 +11,7 @@ import httpx
 
 from ..errors import ResumeNotSupported, SourceError, TransientError
 from ..utils import safe_filename
-from .base import RemoteFile, Source
+from .base import Inspection, RemoteFile, Source
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -206,7 +206,7 @@ class MediaFireSource(Source):
         host = (urlparse(url).hostname or "").lower()
         return host == "mediafire.com" or host.endswith(".mediafire.com")
 
-    async def inspect(self, url: str) -> list[RemoteFile]:
+    async def inspect(self, url: str) -> Inspection:
         if _is_folder_path(url):
             raise SourceError("Las carpetas de MediaFire no están soportadas; envíame un archivo suelto.")
         direct, page, final_url, post_data = await self._resolve(url)
@@ -217,7 +217,7 @@ class MediaFireSource(Source):
             name, size = safe_filename(info[0]), info[1]
         if size is None:
             size, _ = await self._probe(direct, post_data)
-        return [RemoteFile(name=name, size=size, ref=final_url)]
+        return Inspection(files=[RemoteFile(name=name, size=size, ref=final_url)])
 
     async def _file_info(self, url: str) -> tuple[str, int] | None:
         """Nombre y tamaño exactos vía API pública de MediaFire (no siempre está disponible)."""
@@ -258,8 +258,11 @@ class MediaFireSource(Source):
             if offset and r.status_code != 206:
                 raise ResumeNotSupported("MediaFire no permite reanudar esta descarga.")
             self._check_status(r.status_code)
-            async for chunk in r.aiter_bytes(READ_CHUNK):
-                yield chunk
+            try:
+                async for chunk in r.aiter_bytes(READ_CHUNK):
+                    yield chunk
+            except httpx.HTTPError as exc:
+                raise TransientError("Se cortó la conexión con MediaFire; reintentando.") from exc
 
     # -- internos ---------------------------------------------------------------------
 

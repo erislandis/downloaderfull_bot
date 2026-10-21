@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -14,7 +15,7 @@ from aiogram.types import Message
 
 from .config import Settings
 from .errors import BridgeError, QuotaExceeded, TransientError
-from .sources.base import RemoteFile, Source
+from .sources.base import BundleFile, RemoteFile, Source
 from .uploader import TelegramUploader
 from .utils import human_duration, human_size, progress_bar
 
@@ -22,6 +23,8 @@ log = logging.getLogger(__name__)
 EDIT_INTERVAL = 4.0  # segundos mínimos entre ediciones del mensaje de progreso
 RETRY_ATTEMPTS = 3  # reintentos por error transitorio (red, 5xx, rate-limit)
 RETRY_BASE_DELAY = 2.0  # espera tras el primer reintento (se duplica cada vez)
+HISTORY_PER_USER = 5  # envíos recientes guardados por usuario
+HISTORY_USERS = 200  # usuarios con historial (tope de memoria)
 
 
 @dataclass
@@ -32,14 +35,29 @@ class Job:
     files: list[RemoteFile]
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     cancelled: bool = False
+    state: str = "queued"  # queued | running | done | failed
+    note: str = ""
+
+    @property
+    def label(self) -> str:
+        """Nombre de lo que se está subiendo (el ZIP si es un paquete)."""
+        if not self.files:
+            return "?"
+        return self.files[0].name
+
+    @property
+    def size(self) -> int | None:
+        return self.files[0].size if self.files else None
 
 
 class _Progress:
-    def __init__(self, message: Message, header: str, total: int | None) -> None:
+    def __init__(self, message: Message | None, header: str, total: int | None) -> None:
         self._message, self._header, self._total = message, header, total
         self._started = self._last_edit = time.monotonic()
 
     async def __call__(self, done: int) -> None:
+        if self._message is None:
+            return  # no se pudo avisar al usuario: se sigue subiendo igual
         now = time.monotonic()
         if now - self._last_edit < EDIT_INTERVAL:
             return
@@ -69,6 +87,8 @@ class JobManager:
         self._jobs: list[Job] = []  # actual + en cola, en orden
         self._current: Job | None = None
         self._task: asyncio.Task[None] | None = None
+        self._history: dict[int, list[dict[str, object]]] = {}  # user_id -> últimos envíos
+        self._history_lock = threading.Lock()
 
     @property
     def busy(self) -> bool:
@@ -98,6 +118,51 @@ class JobManager:
                 if job is self._current and self._task:
                     self._task.cancel()
         return count
+
+    def user_status(self, user_id: int) -> list[dict[str, object]]:
+        """Estado de los trabajos del usuario: los activos y los últimos enviados.
+
+        Permite que, al volver al chat, sepa si su archivo sigue subiendo, si ya está
+        entregado o si falló (y por qué).
+        """
+        items: list[dict[str, object]] = []
+        for job in self._jobs:
+            if job.user_id != user_id:
+                continue
+            if job.state not in ("queued", "running"):
+                continue  # ya está en el historial: no se repite
+            items.append(
+                {
+                    "name": job.label,
+                    "size": job.size,
+                    "state": job.state,
+                    "note": job.note,
+                    "active": True,
+                }
+            )
+        with self._history_lock:
+            past = list(self._history.get(user_id, ()))
+        items.extend(past)
+        return items
+
+    def _remember(self, job: Job, state: str, note: str = "") -> None:
+        """Guarda el resultado de un envío para poder consultarlo después."""
+        entry = {
+            "name": job.label,
+            "size": job.size,
+            "state": state,
+            "note": note,
+            "active": False,
+        }
+        with self._history_lock:
+            history = self._history.setdefault(job.user_id, [])
+            history.insert(0, entry)
+            del history[HISTORY_PER_USER:]
+            if len(self._history) > HISTORY_USERS:
+                # Límite de memoria: se olvidan los usuarios más antiguos.
+                for old in list(self._history)[:-HISTORY_USERS]:
+                    if old != job.user_id:
+                        del self._history[old]
 
     async def run_forever(self) -> None:
         while True:
@@ -129,39 +194,63 @@ class JobManager:
         total = len(job.files)
         for index, remote in enumerate(job.files, 1):
             title = escape(remote.name)
-            header = f"📦 <b>{title}</b>" + (f" ({index}/{total})" if total > 1 else "")
-            status = await self._bot.send_message(job.chat_id, f"{header}\n⏳ Preparando…")
+            is_bundle = isinstance(remote, BundleFile)
+            icon = "🗜" if is_bundle else "📦"
+            header = f"{icon} <b>{title}</b>" + (f" ({index}/{total})" if total > 1 else "")
+            job.state = "running"
+            try:
+                status = await self._bot.send_message(
+                    job.chat_id, f"{header}\n⏳ {'Comprimiendo…' if is_bundle else 'Preparando…'}"
+                )
+            except Exception:  # noqa: BLE001
+                log.warning("No pude avisar al usuario del trabajo %s", job.id, exc_info=True)
+                status = None  # se sigue igual: lo importante es entregar el archivo
             try:
                 done = await self._upload(job, remote, status, header)
             except QuotaExceeded as exc:
                 wait = f" Vuelve a intentarlo en ~{human_duration(exc.retry_after)}." if exc.retry_after else ""
-                await _safe_edit(status, f"{header}\n⚠️ {escape(str(exc))}{wait}")
+                job.state = "failed"
+                job.note = str(exc)
+                self._remember(job, "failed", str(exc))
+                if status is not None:
+                    await _safe_edit(status, f"{header}\n⚠️ {escape(str(exc))}{wait}")
                 if total - index:
                     await self._notify(job.chat_id, "Detengo el resto de la carpeta por el límite de cuota.")
                 return
             except BridgeError as exc:
-                await _safe_edit(status, f"{header}\n❌ {escape(str(exc))}")
+                job.state = "failed"
+                job.note = str(exc)
+                self._remember(job, "failed", str(exc))
+                if status is not None:
+                    await _safe_edit(status, f"{header}\n❌ {escape(str(exc))}")
                 continue
 
-            await _safe_edit(status, f"✅ <b>{title}</b> ({human_size(done)}) enviado como documento.")
+            job.state = "done"
+            job.note = ""
+            self._remember(job, "done")
+            if status is not None:
+                await _safe_edit(status, f"✅ <b>{title}</b> ({human_size(done)}) enviado como documento.")
 
-    async def _upload(self, job: Job, remote: RemoteFile, status: Message, header: str) -> int:
+    async def _upload(self, job: Job, remote: RemoteFile, status: Message | None, header: str) -> int:
         """Sube con reintentos ante errores transitorios (red, 5xx, rate-limit)."""
         attempts = max(1, self.retry_attempts)
+        # El tamaño de un ZIP no se conoce hasta comprimirlo: se muestra solo lo transferido.
+        total = None if isinstance(remote, BundleFile) else remote.size
         for attempt in range(attempts):
             try:
                 return await self._uploader.upload(
-                    job.source, remote, job.chat_id, _Progress(status, header, remote.size)
+                    job.source, remote, job.chat_id, _Progress(status, header, total) if status else None
                 )
             except TransientError as exc:
                 if attempt + 1 >= attempts:
                     raise
                 delay = self.retry_base_delay * (2**attempt)
-                await _safe_edit(
-                    status,
-                    f"{header}\n⚠️ {escape(str(exc))} "
-                    f"Reintento {attempt + 1}/{attempts - 1} en {human_duration(int(delay))}…",
-                )
+                if status is not None:
+                    await _safe_edit(
+                        status,
+                        f"{header}\n⚠️ {escape(str(exc))} "
+                        f"Reintento {attempt + 1}/{attempts - 1} en {human_duration(int(delay))}…",
+                    )
                 await asyncio.sleep(delay)
         raise AssertionError("inalcanzable")
 

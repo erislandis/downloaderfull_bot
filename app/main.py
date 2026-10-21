@@ -43,6 +43,7 @@ STATUS_PAGE = """<!DOCTYPE html>
   .sub { color: #8fa0b8; margin: 0 0 1.25rem; }
   .badge { display: inline-block; background: #12351f; color: #63d58a; border: 1px solid #1f5a35;
            border-radius: 999px; padding: .15rem .7rem; font-size: .85rem; }
+  .badge.warn { background: #3a2a10; color: #e2b25c; border-color: #6b4d1c; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 1.25rem 0; }
   dt { color: #8fa0b8; }
   dd { margin: 0; }
@@ -55,7 +56,7 @@ STATUS_PAGE = """<!DOCTYPE html>
 <main>
   <h1>BridgeBot</h1>
   <p class="sub">Puente de descargas MediaFire/Mega → Telegram</p>
-  <p><span class="badge">● en línea</span></p>
+  <p>__MTPROTO__</p>
   <dl>
     <dt>Bot</dt><dd>__BOT__</dd>
     <dt>Versión</dt><dd>__VERSION__</dd>
@@ -134,6 +135,12 @@ async def api_status(request: Request) -> dict:
 async def index(request: Request) -> str:
     runtime: Runtime = request.app.state.runtime
     state = runtime.status()
+    mtproto = state.get("mtproto") or {}
+    mtproto_badge = (
+        '<span class="badge">● en línea</span>'
+        if mtproto.get("ok")
+        else '<span class="badge warn">⚠ sin MTProto</span> (solo archivos ≤ 50 MB)'
+    )
     return (
         STATUS_PAGE
         .replace("__BOT__", f"@{state['bot']}" if state["bot"] else "desconocido")
@@ -142,6 +149,7 @@ async def index(request: Request) -> str:
         .replace("__QUEUE__", str(state["queue"]["pending_jobs"]))
         .replace("__SOURCES__", " · ".join(state["sources"]))
         .replace("__MAXSIZE__", str(state["max_file_mb"]))
+        .replace("__MTPROTO__", mtproto_badge)
     )
 
 

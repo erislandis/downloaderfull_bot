@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app.errors import QuotaExceeded, ResumeNotSupported
-from app.sources.base import RemoteFile
+from app.sources.base import RemoteFile, collect_files, node_to_file
 from app.sources.mediafire import MediaFireSource
 from app.sources.mega import MegaSource, b64e
 from tests.test_mega import encrypt_attrs, encrypt_ctr, file_key_parts
@@ -48,7 +48,9 @@ def test_mediafire_inspect_y_stream_con_reanudacion():
     async def go():
         async with client(mediafire_handler(), follow_redirects=True) as http:
             src = MediaFireSource(http)
-            [f] = await src.inspect("https://www.mediafire.com/file/abc/Mi_Juego.zip/file")
+            insp = await src.inspect("https://www.mediafire.com/file/abc/Mi_Juego.zip/file")
+            assert insp.tree is None and len(insp.files) == 1
+            f = insp.files[0]
             assert (f.name, f.size) == ("Mi Juego.zip", len(BODY))
             assert await read_all(src.stream(f)) == BODY
             assert await read_all(src.stream(f, 1234)) == BODY[1234:]
@@ -99,7 +101,8 @@ def test_mediafire_malware_descarga_con_post_y_pass():
     async def go():
         async with client(malware_handler(), follow_redirects=True) as http:
             src = MediaFireSource(http)
-            [f] = await src.inspect("https://www.mediafire.com/file/abc/Peligroso.rar/file")
+            insp = await src.inspect("https://www.mediafire.com/file/abc/Peligroso.rar/file")
+            f = insp.files[0]
             assert (f.name, f.size) == ("Peligroso.rar", len(BODY))
             assert await read_all(src.stream(f)) == BODY
             assert await read_all(src.stream(f, 1234)) == BODY[1234:]
@@ -150,7 +153,8 @@ def test_mega_inspect_stream_y_reanudacion_desde_cualquier_byte():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            [f] = await src.inspect(url)
+            insp = await src.inspect(url)
+            f = insp.files[0]
             assert f.name == "video_raro_.mp4" and f.size == len(plain)  # nombre saneado
             assert await read_all(src.stream(f)) == plain
             for offset in (1, 16, 31_337):
@@ -165,7 +169,7 @@ def test_mega_cuota_agotada_informa_tiempo_de_espera():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            [f] = await src.inspect(url)
+            f = (await src.inspect(url)).files[0]
             with pytest.raises(QuotaExceeded) as exc:
                 await read_all(src.stream(f))
             assert exc.value.retry_after == 1800
@@ -180,10 +184,15 @@ def test_mega_carpeta_lista_archivos_y_descarga_uno():
     cipher = encrypt_ctr(key, plain)
     aes_key, _ = file_key_parts(key)
     enc_key = b64e(AES.new(master, AES.MODE_ECB).encrypt(key))
+    root_key = os.urandom(16)
     nodes = [
-        {"h": "FILEHNDL", "p": "FOLDERHD", "t": 0, "s": len(plain), "k": f"USER:{enc_key}",
+        # La API devuelve la raíz real del share, que no es el handle del enlace.
+        {"h": "ROOTREAL", "p": "OUTSIDE", "t": 1,
+         "k": "USER:" + b64e(AES.new(master, AES.MODE_ECB).encrypt(root_key)),
+         "a": encrypt_attrs({"n": "carpeta"}, root_key)},
+        {"h": "FILEHNDL", "p": "ROOTREAL", "t": 0, "s": len(plain), "k": f"USER:{enc_key}",
          "a": encrypt_attrs({"n": "a.bin"}, aes_key)},
-        {"h": "DIRHANDL", "p": "FOLDERHD", "t": 1,
+        {"h": "DIRHANDL", "p": "ROOTREAL", "t": 1,
          "k": "USER:" + b64e(AES.new(master, AES.MODE_ECB).encrypt(os.urandom(16))), "a": ""},
     ]
 
@@ -199,7 +208,9 @@ def test_mega_carpeta_lista_archivos_y_descarga_uno():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            files = await src.inspect(f"https://mega.nz/folder/FOLDERHD#{b64e(master)}")
+            insp = await src.inspect(f"https://mega.nz/folder/FOLDERHD#{b64e(master)}")
+            # La raíz real del share no es el handle del enlace: la API devuelve otro nodo.
+            files = collect_files(insp.tree)
             assert [(f.name, f.size) for f in files] == [("a.bin", len(plain))]
-            assert await read_all(src.stream(files[0])) == plain
+            assert await read_all(src.stream(node_to_file(files[0]))) == plain
     asyncio.run(go())
