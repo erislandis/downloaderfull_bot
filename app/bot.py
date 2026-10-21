@@ -478,6 +478,11 @@ def build_dispatcher(services: Services) -> Dispatcher:
         lines.append("\nPuedes cerrar Telegram: la transferencia sigue en el servidor.")
         await message.answer("\n".join(lines))
 
+    @router.message(F.text.startswith("/"), F.chat.type == "private")
+    async def unknown_command(message: Message) -> None:
+        """Comandos no reconocidos: mejor decirlo que tratarlos como un enlace."""
+        await message.answer("No conozco ese comando. Usa /ayuda para ver las opciones.")
+
     @router.message(F.text)
     async def on_text(message: Message, services: Services) -> None:
         urls = URL_RE.findall(message.text or "")[:MAX_URLS_PER_MESSAGE]

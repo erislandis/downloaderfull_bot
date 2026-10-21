@@ -399,3 +399,16 @@ def test_si_el_hook_de_reinicio_falla_el_bot_reinicia_igual():
         assert any("Reiniciando el proceso" in t for t in texts)
 
     asyncio.run(go())
+
+
+def test_un_comando_desconocido_no_se_confunde_con_un_enlace():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/comando_que_no_existe", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts
+        assert "No conozco ese comando" in texts[0]
+        assert "Envíame un enlace" not in texts[0]
+
+    asyncio.run(go())
