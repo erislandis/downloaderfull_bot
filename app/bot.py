@@ -184,9 +184,16 @@ def build_dispatcher(services: Services) -> Dispatcher:
 
     @admin_router.callback_query(F.data == "rs:yes")
     async def admin_restart_confirm(callback: CallbackQuery, services: Services) -> None:
-        await callback.answer("Reiniciando…")
+        try:
+            await callback.answer("Reiniciando…")
+        except TelegramAPIError:
+            pass  # aunque Telegram no acepte el aviso, el reinicio debe continuar
         cancelled = services.jobs.cancel_all()
-        mode, _detail = await services.restart()
+        try:
+            mode, _detail = await services.restart()
+        except Exception:  # noqa: BLE001  # nunca dejar al usuario sin respuesta
+            log.exception("Fallo al reiniciar el servicio; termino el proceso igualmente")
+            mode = "exit"
         if mode == "deploy":
             text = "♻️ Redeploy lanzado en Render. El bot vuelve en uno o dos minutos."
         else:
@@ -201,7 +208,10 @@ def build_dispatcher(services: Services) -> Dispatcher:
 
     @admin_router.callback_query(F.data == "rs:no")
     async def admin_restart_cancel(callback: CallbackQuery) -> None:
-        await callback.answer("Cancelado.")
+        try:
+            await callback.answer("Cancelado.")
+        except TelegramAPIError:
+            pass
         if callback.message is not None:
             await _safe_edit_msg(callback.message, "❌ Reinicio cancelado.")
 

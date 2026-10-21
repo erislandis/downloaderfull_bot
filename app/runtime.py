@@ -227,17 +227,27 @@ class Runtime:
 
         Devuelve ``(modo, detalle)``: ``deploy`` si lanzó el *deploy hook* de Render,
         ``exit`` si hay que terminar el proceso (Render lo vuelve a levantar).
+
+        Cualquier fallo del *deploy hook* (URL mal formada, sin red, 4xx/5xx…) cae al
+        modo ``exit`` para que el reinicio ocurra igualmente.
         """
         hook = self.settings.render_deploy_hook_url
         if hook:
             try:
-                async with httpx.AsyncClient(timeout=20.0) as client:
+                async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
                     response = await client.post(hook)
                 response.raise_for_status()
-            except httpx.HTTPError as exc:
-                log.warning("El deploy hook de Render falló (%s); reinicio el proceso", exc)
+            except Exception as exc:  # noqa: BLE001  # la URL puede ser inválida (no es HTTPError)
+                # No se registra `exc` completo: la URL del hook contiene una clave secreta.
+                log.warning(
+                    "El deploy hook de Render falló (%s); reinicio el proceso",
+                    type(exc).__name__,
+                )
             else:
+                log.info("Deploy hook de Render lanzado correctamente")
                 return "deploy", ""
+        else:
+            log.info("Sin RENDER_DEPLOY_HOOK_URL: reinicio terminando el proceso")
         return "exit", ""
 
     async def healthcheck_mtproto(self) -> tuple[bool, str]:

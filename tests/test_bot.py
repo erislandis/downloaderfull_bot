@@ -384,3 +384,18 @@ def test_el_aviso_de_permisos_muestra_el_id_del_usuario():
         assert f"<code>{OTHER_ID}</code>" in texts[0]
 
     asyncio.run(go())
+
+
+def test_si_el_hook_de_reinicio_falla_el_bot_reinicia_igual():
+    async def go():
+        async def boom() -> tuple[str, str]:
+            raise RuntimeError("deploy hook roto")
+
+        services, bot, session = make_services()
+        services.restart = boom
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_callback(bot, "rs:yes", ADMIN_ID))
+        texts = sent_texts(session)
+        assert any("Reiniciando el proceso" in t for t in texts)
+
+    asyncio.run(go())
