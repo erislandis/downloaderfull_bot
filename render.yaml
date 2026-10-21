@@ -21,3 +21,7 @@ services:
         sync: false
       - key: TELEGRAM_SESSION
         sync: false
+      - key: MT_UPLOAD_PARALLEL
+        value: "6"
+      - key: ZIP_LEVEL
+        value: "1"

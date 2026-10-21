@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass
 from html import escape
 from typing import Any, Awaitable, Callable
@@ -16,10 +18,18 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from .admin import (
     AdminRegistry,
+    BanRegistry,
     format_admin_panel,
+    format_admins,
+    format_bans,
+    format_logs,
     format_queue,
+    format_stats,
     format_users,
+    format_version,
+    is_admin_callback,
     is_admin_command,
+    parse_int,
     parse_user_id,
 )
 from .config import Settings
@@ -39,7 +49,7 @@ from .sources.base import (
     tree_from_files,
 )
 from .uploader import TelegramUploader
-from .utils import human_size
+from .utils import human_duration, human_size
 
 log = logging.getLogger(__name__)
 
@@ -69,28 +79,61 @@ class Services:
     jobs: JobManager
     folders: FolderBrowser
     admin: AdminRegistry
+    bans: BanRegistry
     status: Callable[[], dict[str, Any]]  # instantánea del runtime (uptime, bot, MTProto)
+    logs: Callable[[int], list[str]]  # últimas líneas del registro
+    resources: Callable[[], dict[str, Any]]  # memoria y disco libres
+    restart: Callable[[], Awaitable[tuple[str, str]]]  # (modo, detalle)
+    healthcheck: Callable[[], Awaitable[tuple[bool, str]]]  # comprueba MTProto
+    refresh_commands: Callable[[], Awaitable[None]]  # republica el menú de comandos
+    environment: Callable[[], dict[str, Any]]  # versión, Python, sistema
 
 
 class AdminMiddleware(BaseMiddleware):
     """Deja pasar los mensajes normales y bloquea los comandos de administración.
 
-    Solo se bloquea si el mensaje **es** un comando de administración y quien lo manda no
-    es administrador: el resto de mensajes (enlaces, /estado, texto) siguen su curso.
+    Solo se bloquea si el mensaje **es** un comando de administración (o el callback es
+    de la zona de administración) y quien lo manda no es administrador: el resto de
+    mensajes (enlaces, /estado, texto) siguen su curso.
     """
 
     def __init__(self, admins: AdminRegistry) -> None:
         self._admins = admins
 
     async def __call__(self, handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:
-        if not is_admin_command(getattr(event, "text", None)):
+        is_callback = isinstance(event, CallbackQuery)
+        admin_event = (
+            is_admin_callback(event.data) if is_callback else is_admin_command(getattr(event, "text", None))
+        )
+        if not admin_event:
             return await handler(event, data)
         user = data.get("event_from_user")
         if self._admins.is_admin(getattr(user, "id", None)):
             return await handler(event, data)
         if isinstance(event, Message):
             await event.answer("🔒 Este comando es solo para el administrador del bot.")
+        else:
+            await event.answer("🔒 Solo para administradores.", show_alert=True)
         return None
+
+
+class BanMiddleware(BaseMiddleware):
+    """Silencia a los usuarios bloqueados sin afectar a los administradores."""
+
+    def __init__(self, bans: BanRegistry, admins: AdminRegistry) -> None:
+        self._bans = bans
+        self._admins = admins
+
+    async def __call__(self, handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:
+        user = data.get("event_from_user")
+        user_id = getattr(user, "id", None)
+        if self._bans.is_banned(user_id) and not self._admins.is_admin(user_id):
+            if isinstance(event, Message):
+                await event.answer("🚫 Estás bloqueado y no puedes usar este bot.")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🚫 Estás bloqueado.", show_alert=True)
+            return None
+        return await handler(event, data)
 
 
 def build_dispatcher(services: Services) -> Dispatcher:
@@ -103,6 +146,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
     """
     admin_router = Router(name="admin")
     admin_router.message.outer_middleware(AdminMiddleware(services.admin))
+    admin_router.callback_query.outer_middleware(AdminMiddleware(services.admin))
 
     @admin_router.message(Command("admin", ignore_case=True))
     async def admin_panel(message: Message, services: Services) -> None:
@@ -125,6 +169,167 @@ def build_dispatcher(services: Services) -> Dispatcher:
             )
         )
 
+    @admin_router.message(Command("reiniciar", "restart", ignore_case=True))
+    async def admin_restart(message: Message) -> None:
+        """Reinicia el servicio (pide confirmación: corta las transferencias en curso)."""
+        await message.answer(
+            "♻️ <b>¿Reiniciar el servicio?</b>\n"
+            "Se cortarán las transferencias en curso; las de la cola se perderán.",
+            reply_markup=_kb([[("✅ Sí, reiniciar", "rs:yes"), ("❌ Cancelar", "rs:no")]]),
+        )
+
+    @admin_router.callback_query(F.data == "rs:yes")
+    async def admin_restart_confirm(callback: CallbackQuery, services: Services) -> None:
+        await callback.answer("Reiniciando…")
+        cancelled = services.jobs.cancel_all()
+        mode, _detail = await services.restart()
+        if mode == "deploy":
+            text = "♻️ Redeploy lanzado en Render. El bot vuelve en uno o dos minutos."
+        else:
+            text = "♻️ Reiniciando el proceso… Render lo levantará en unos segundos."
+        if cancelled:
+            text += f" ({cancelled} trabajo(s) cancelado(s).)"
+        if callback.message is not None:
+            await _safe_edit_msg(callback.message, text)
+        if mode == "exit":
+            # Se deja que la respuesta llegue a Telegram antes de terminar el proceso.
+            asyncio.get_running_loop().call_later(1.5, os._exit, 0)
+
+    @admin_router.callback_query(F.data == "rs:no")
+    async def admin_restart_cancel(callback: CallbackQuery) -> None:
+        await callback.answer("Cancelado.")
+        if callback.message is not None:
+            await _safe_edit_msg(callback.message, "❌ Reinicio cancelado.")
+
+    @admin_router.message(Command("version", ignore_case=True))
+    async def admin_version(message: Message, services: Services) -> None:
+        env = services.environment()
+        await message.answer(
+            format_version(
+                version=str(env.get("version") or "?"),
+                python=str(env.get("python") or "?"),
+                platform=str(env.get("platform") or "?"),
+                uptime_seconds=int(env.get("uptime_seconds") or 0),
+                mtproto_ok=bool(env.get("mtproto_ok")),
+                mtproto_error=str(env.get("mtproto_error") or ""),
+            )
+        )
+
+    @admin_router.message(Command("ping", ignore_case=True))
+    async def admin_ping(message: Message, bot: Bot, services: Services) -> None:
+        """Mide una ida y vuelta real a la Bot API (no la del servidor web)."""
+        started = time.monotonic()
+        try:
+            await bot.get_chat(message.chat.id)
+        except TelegramAPIError:
+            pass  # aún así respondemos: el ping no debe fallar por un error de la API
+        latency_ms = int((time.monotonic() - started) * 1000)
+        uptime = int(services.status().get("uptime_seconds") or 0)
+        await message.answer(
+            f"🏓 Pong. Latencia de la Bot API: {latency_ms} ms · en marcha {human_duration(uptime)}."
+        )
+
+    @admin_router.message(Command("stats", ignore_case=True))
+    async def admin_stats(message: Message, services: Services) -> None:
+        st = services.status()
+        stats = services.jobs.stats_snapshot()
+        res = services.resources()
+        queue = st.get("queue") or {}
+        await message.answer(
+            format_stats(
+                uptime_seconds=int(st.get("uptime_seconds") or 0),
+                jobs_ok=int(stats.get("ok", 0)),
+                jobs_failed=int(stats.get("failed", 0)),
+                bytes_sent=int(stats.get("bytes", 0)),
+                seconds_active=float(stats.get("seconds", 0.0)),
+                users=len(services.jobs.known_users()),
+                admins=len(services.admin),
+                queue_pending=int(queue.get("pending_jobs") or 0),
+                queue_paused=services.jobs.paused,
+                mtproto_ok=bool((st.get("mtproto") or {}).get("ok")),
+                memory_mb=res.get("memory_mb"),
+                disk_free_mb=res.get("disk_free_mb"),
+                upload_parallelism=services.settings.upload_parallelism,
+                zip_level=services.settings.zip_level,
+            )
+        )
+
+    @admin_router.message(Command("logs", ignore_case=True))
+    async def admin_logs(message: Message, services: Services) -> None:
+        count = max(1, min(parse_int(message.text, 20) or 20, 100))
+        await message.answer(format_logs(services.logs(count)))
+
+    @admin_router.message(Command("test_mtproto", ignore_case=True))
+    async def admin_mtproto(message: Message, services: Services) -> None:
+        ok, detail = await services.healthcheck()
+        if ok:
+            await message.answer("✅ La sesión MTProto funciona: puedo subir archivos grandes.")
+        else:
+            await message.answer(f"⚠️ La sesión MTProto falla: {escape(detail or 'sin detalle')}")
+
+    @admin_router.message(Command("pausar", ignore_case=True))
+    async def admin_pause(message: Message, services: Services) -> None:
+        if services.jobs.pause():
+            await message.answer("⏸ Cola en pausa: el trabajo en curso termina, pero no empezará otro.")
+        else:
+            await message.answer("ℹ️ La cola ya estaba en pausa.")
+
+    @admin_router.message(Command("reanudar", ignore_case=True))
+    async def admin_resume(message: Message, services: Services) -> None:
+        if services.jobs.resume():
+            await message.answer("▶️ Cola reanudada.")
+        else:
+            await message.answer("ℹ️ La cola no estaba en pausa.")
+
+    @admin_router.message(Command("cancelar_usuario", ignore_case=True))
+    async def admin_cancel_user(message: Message, services: Services) -> None:
+        user_id = parse_user_id(message.text)
+        if user_id is None:
+            await message.answer("Uso: <code>/cancelar_usuario id_de_telegram</code>")
+            return
+        n = services.jobs.cancel_user(user_id)
+        await message.answer(f"🛑 Cancelé {n} trabajo(s) de <code>{user_id}</code>." if n else "Ese usuario no tenía transferencias.")
+
+    @admin_router.message(Command("admins", ignore_case=True))
+    async def admin_admins(message: Message, services: Services) -> None:
+        await message.answer(format_admins(services.admin.ids))
+
+    @admin_router.message(Command("ban", ignore_case=True))
+    async def admin_ban(message: Message, services: Services) -> None:
+        user_id = parse_user_id(message.text)
+        if user_id is None:
+            await message.answer("Uso: <code>/ban id_de_telegram [motivo]</code>")
+            return
+        if services.admin.is_admin(user_id):
+            await message.answer("❌ No puedes bloquear a un administrador; quítale antes los permisos con /revocar.")
+            return
+        parts = (message.text or "").split(maxsplit=2)
+        reason = parts[2].strip() if len(parts) > 2 else ""
+        if not services.bans.ban(user_id, reason):
+            await message.answer(f"ℹ️ <code>{user_id}</code> ya estaba bloqueado.")
+            return
+        cancelled = services.jobs.cancel_user(user_id)
+        extra = f" y cancelé {cancelled} trabajo(s)" if cancelled else ""
+        note = f" Motivo: {escape(reason)}." if reason else ""
+        await message.answer(f"🚫 <code>{user_id}</code> bloqueado{extra}.{note}")
+
+    @admin_router.message(Command("unban", ignore_case=True))
+    async def admin_unban(message: Message, services: Services) -> None:
+        user_id = parse_user_id(message.text)
+        if user_id is None:
+            await message.answer("Uso: <code>/unban id_de_telegram</code>")
+            return
+        if services.bans.unban(user_id):
+            await message.answer(f"✅ <code>{user_id}</code> desbloqueado.")
+        else:
+            await message.answer(f"ℹ️ <code>{user_id}</code> no estaba bloqueado.")
+
+    @admin_router.message(Command("baneados", ignore_case=True))
+    async def admin_bans(message: Message, services: Services) -> None:
+        await message.answer(
+            format_bans([{"id": i, "reason": services.bans.reason(i)} for i in sorted(services.bans.ids)])
+        )
+
     @admin_router.message(Command("cola", ignore_case=True))
     async def admin_queue(message: Message, services: Services) -> None:
         await message.answer(format_queue(services.jobs.queue_items()))
@@ -140,13 +345,19 @@ def build_dispatcher(services: Services) -> Dispatcher:
 
     @admin_router.message(Command("limpiar", ignore_case=True))
     async def admin_clean(message: Message, services: Services) -> None:
-        """Borra todo lo que el bot tiene almacenado en Telegram (afecta a todos)."""
+        """Borra lo que el bot tiene almacenado en Telegram (afecta a todos).
+
+        Sin argumentos borra todo; con horas, solo lo más antiguo que ese margen.
+        """
+        hours = max(0, parse_int(message.text, 0) or 0)
+        max_age = None if hours == 0 else hours * 3600
         try:
-            n = await services.uploader.cleanup(None)
+            n = await services.uploader.cleanup(max_age)
         except BridgeError as exc:
             await message.answer(f"❌ {escape(str(exc))}")
             return
-        await message.answer(f"🧹 Borré {n} archivo(s) almacenados." if n else "No había nada que borrar.")
+        scope = "antiguos" if hours else "almacenados"
+        await message.answer(f"🧹 Borré {n} archivo(s) {scope}." if n else "No había nada que borrar.")
 
     @admin_router.message(Command("broadcast", ignore_case=True), F.text)
     async def admin_broadcast(message: Message, services: Services) -> None:
@@ -166,6 +377,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
             await message.answer("Uso: <code>/permitir id_de_telegram</code>")
             return
         if services.admin.grant(user_id):
+            await services.refresh_commands()
             await message.answer(f"✅ <code>{user_id}</code> ya puede usar los comandos de administración.")
         else:
             await message.answer(f"ℹ️ <code>{user_id}</code> ya era administrador.")
@@ -179,15 +391,18 @@ def build_dispatcher(services: Services) -> Dispatcher:
         if not services.admin.revoke(user_id):
             await message.answer(f"ℹ️ <code>{user_id}</code> no era administrador.")
             return
+        await services.refresh_commands()
         if user_id == message.from_user.id:
             await message.answer(f"🚫 Te has quitado a ti mismo los permisos de administración.")
         else:
             await message.answer(f"🚫 <code>{user_id}</code> ya no puede usar los comandos de administración.")
 
     router = Router(name="user")
+    router.message.outer_middleware(BanMiddleware(services.bans, services.admin))
+    router.callback_query.outer_middleware(BanMiddleware(services.bans, services.admin))
 
     @router.message(CommandStart())
-    @router.message(Command("ayuda", ignore_case=True))
+    @router.message(Command("ayuda", "help", ignore_case=True))
     async def start(message: Message) -> None:
         uid = message.from_user.id if message.from_user else 0
         await message.answer(
@@ -293,7 +508,7 @@ async def _inspect_with_retry(source: Source, url: str) -> Inspection:
 
 
 async def _handle_url(message: Message, services: Services, url: str) -> None:
-    source = resolve_source(url, services.http)
+    source = resolve_source(url, services.http, services.settings.zip_level)
     if source is None:
         await message.answer("Ese sitio no está soportado. Acepto: " + ", ".join(s.label for s in SOURCES) + ".")
         return
@@ -469,7 +684,7 @@ async def _send_file(callback: CallbackQuery, services: Services, view: FolderVi
             f"Pesa {human_size(node.size)}; el máximo es {human_size(limit)}.", show_alert=True
         )
         return
-    source = resolve_source(view.url, services.http)
+    source = resolve_source(view.url, services.http, services.settings.zip_level)
     if source is None:
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return
@@ -506,7 +721,7 @@ async def _send_bundle(
             show_alert=True,
         )
         return
-    source = resolve_source(view.url, services.http)
+    source = resolve_source(view.url, services.http, services.settings.zip_level)
     if source is None:
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return

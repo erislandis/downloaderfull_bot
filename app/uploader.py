@@ -26,6 +26,7 @@ import shutil
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from aiogram import Bot
@@ -36,6 +37,7 @@ from telethon.sessions import StringSession
 
 from .config import Settings
 from .errors import TransientError, UploadError
+from .mtproto_upload import upload_document
 from .sources.base import BundleFile, RemoteFile, Source
 from .streams import StreamReader
 
@@ -43,6 +45,20 @@ log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[int], Awaitable[None]]
 PROGRESS_MIN_INTERVAL = 0.5
+PART_SIZE_KB = 512  # máximo que acepta Telegram (mitad de peticiones que 256 KB)
+DOWNLOAD_ATTEMPTS = 3  # reintentos de la descarga antes de tirar el trabajo
+WRITE_BATCH = 1024 * 1024  # bytes que se acumulan antes de escribir en disco
+
+
+@dataclass
+class Timing:
+    """Tiempos del último envío (para el informe /stats)."""
+
+    download: float = 0.0
+    upload: float = 0.0
+    forward: float = 0.0
+    bytes_downloaded: int = 0
+    bytes_uploaded: int = 0
 
 
 def _read_file(path: str) -> bytes:
@@ -67,6 +83,13 @@ class TelegramUploader:
         self._start_error: BaseException | None = None
         self._storage: list[tuple[int, float]] = []
         self._storage_lock = threading.Lock()
+        # Hilo exclusivo para volcar los bloques en el lector de la subida: así el
+        # productor nunca compite con la compresión de los ZIP ni con el hash.
+        self._feed_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="feed"
+        )
+        self.last_timing = Timing()
+        self.last_error: str = ""
 
     @property
     def bot_username(self) -> str | None:
@@ -119,6 +142,7 @@ class TelegramUploader:
             loop.close()
 
     async def aclose(self) -> None:
+        self._feed_executor.shutdown(wait=False, cancel_futures=True)
         if self._loop is None:
             return
         with contextlib.suppress(Exception):
@@ -150,11 +174,13 @@ class TelegramUploader:
     async def _via_bot(
         self, source: Source, remote: RemoteFile, chat_id: int, on_progress: ProgressCallback | None
     ) -> int:
+        started = time.monotonic()
         buf = bytearray()
         async for chunk in source.stream(remote):
             buf += chunk
             if on_progress is not None:
                 await on_progress(len(buf))
+        download_done = time.monotonic() - started
         if len(buf) > self._s.bot_api_max_bytes:
             raise UploadError("El archivo creció por encima del máximo de la Bot API; inténtalo de nuevo.")
         try:
@@ -170,6 +196,12 @@ class TelegramUploader:
             raise TransientError(f"Telegram pidió esperar {exc.retry_after} s; reintentando.") from exc
         except Exception as exc:  # noqa: BLE001
             raise UploadError(f"No pude enviar el archivo: {exc}") from exc
+        self.last_timing = Timing(
+            download=download_done,
+            upload=time.monotonic() - started,
+            bytes_downloaded=len(buf),
+            bytes_uploaded=len(buf),
+        )
         return len(buf)
 
     # -- ZIP (varios archivos en uno) ---------------------------------------------------
@@ -237,13 +269,19 @@ class TelegramUploader:
         """Escribe el contenido de un archivo (o el ZIP) en un fichero temporal."""
         fd, path = tempfile.mkstemp(prefix="bridgebot-", suffix=".zip" if isinstance(remote, BundleFile) else ".bin")
         written = 0
+        batch = bytearray()
         try:
             with os.fdopen(fd, "wb") as fh:
                 async for chunk in source.stream(remote):
-                    await asyncio.to_thread(fh.write, chunk)
+                    batch += chunk
                     written += len(chunk)
+                    if len(batch) >= WRITE_BATCH:
+                        await asyncio.to_thread(fh.write, bytes(batch))
+                        batch.clear()
                     if on_progress is not None:
                         await on_progress(written)
+                if batch:
+                    await asyncio.to_thread(fh.write, bytes(batch))
         except OSError as exc:
             with contextlib.suppress(OSError):
                 os.unlink(path)
@@ -273,16 +311,45 @@ class TelegramUploader:
         reader = StreamReader(max_buffered=self._s.buffer_size * 4, name=remote.name)
         self._progress = on_progress
         produced = 0
+        timing = Timing()
+        started = time.monotonic()
+        download_done = 0.0
 
         async def _produce() -> None:
-            nonlocal produced
-            try:
-                async for chunk in source.stream(remote):
-                    produced += len(chunk)
-                    await asyncio.to_thread(reader.feed, chunk)
-                reader.finish()
-            except BaseException as exc:  # noqa: BLE001
-                reader.finish(exc)
+            """Descarga el archivo y lo va metiendo en el lector de la subida.
+
+            Si la descarga se corta (la CDN de Mega corta las conexiones largas) se
+            reanuda desde el punto exacto en el que se quedó: la clave de Mega
+            permite descifrar desde cualquier bloque.
+            """
+            nonlocal produced, download_done
+            offset = 0
+            attempts = 0
+            while True:
+                try:
+                    async for chunk in source.stream(remote, offset):
+                        produced += len(chunk)
+                        offset = produced
+                        await self._main.run_in_executor(self._feed_executor, reader.feed, chunk)
+                    download_done = time.monotonic() - started
+                    reader.finish()
+                    return
+                except TransientError as exc:
+                    attempts += 1
+                    if attempts > DOWNLOAD_ATTEMPTS:
+                        reader.finish(exc)
+                        return
+                    log.warning(
+                        "Se cortó la descarga de «%s» en %d/%d bytes; reanudo: %s",
+                        remote.name,
+                        produced,
+                        remote.size or 0,
+                        exc,
+                    )
+                    await asyncio.sleep(2**attempts)
+                except BaseException as exc:  # noqa: BLE001
+                    reader.finish(exc)
+                    return
 
         producer = self._main.create_task(_produce())
         try:
@@ -306,7 +373,13 @@ class TelegramUploader:
 
         if message is None:
             raise UploadError("Telegram no confirmó el documento.")
+        timing.bytes_downloaded = produced
+        timing.bytes_uploaded = remote.size or produced
+        timing.download = download_done
+        timing.upload = time.monotonic() - started
         await self._forward(message, chat_id)
+        timing.forward = time.monotonic() - started - timing.upload
+        self.last_timing = timing
         return produced or (remote.size or 0)
 
     async def _via_mtproto_file(
@@ -322,6 +395,8 @@ class TelegramUploader:
             raise UploadError("La sesión MTProto no está disponible.")
 
         self._progress = on_progress
+        timing = Timing()
+        started = time.monotonic()
         try:
             message = await asyncio.wrap_future(self._submit(self._run_upload_path(path, remote, size)))
         except asyncio.CancelledError:
@@ -334,7 +409,12 @@ class TelegramUploader:
 
         if message is None:
             raise UploadError("Telegram no confirmó el documento.")
+        timing.upload = time.monotonic() - started
+        timing.bytes_downloaded = size
+        timing.bytes_uploaded = size
         await self._forward(message, chat_id)
+        timing.forward = time.monotonic() - started - timing.upload
+        self.last_timing = timing
         return size
 
     async def _forward(self, message, chat_id: int) -> None:
@@ -363,34 +443,74 @@ class TelegramUploader:
         raise UploadError(f"Subí el archivo pero no pude reenviarlo: {last}")
 
     async def _run_upload(self, reader: StreamReader, remote: RemoteFile):
-        async def runner():
-            self._current_task = asyncio.ensure_future(
-                self._client.send_file(  # type: ignore[union-attr]
-                    self._bot_entity,
-                    file=reader,
-                    force_document=True,
-                    file_name=remote.name,
-                    file_size=remote.size,
-                    progress_callback=self._on_progress_thread,
-                )
-            )
-            try:
-                return await self._current_task
-            finally:
-                self._current_task = None
+        """Sube el contenido del lector (ya alimentado por el productor)."""
+        size = remote.size or 0
+        if self._s.upload_parallelism > 1 and size > 0:
+            return await self._run_upload_parallel(reader, remote, size)
+        return await self._run_upload_sequential(reader, remote)
 
-        return await runner()
+    async def _run_upload_parallel(self, reader: StreamReader, remote: RemoteFile, size: int):
+        """Varias piezas en vuelo: es lo que quita la latencia de la subida."""
+        handle = await upload_document(
+            self._client,  # type: ignore[arg-type]
+            self._bot_entity,
+            reader,
+            size=size,
+            name=remote.name,
+            parallelism=self._s.upload_parallelism,
+            progress=self._on_progress_bytes,
+        )
+        # `handle` ya está subido: `send_file` solo lo publica, no lo vuelve a subir.
+        self._current_task = asyncio.ensure_future(
+            self._client.send_file(  # type: ignore[union-attr]
+                self._bot_entity,
+                file=handle,
+                force_document=True,
+                file_name=remote.name,
+            )
+        )
+        try:
+            return await self._current_task
+        finally:
+            self._current_task = None
+
+    async def _run_upload_sequential(self, reader: StreamReader, remote: RemoteFile):
+        """Subida pieza a pieza (la que hace Telethon por defecto)."""
+        self._current_task = asyncio.ensure_future(
+            self._client.send_file(  # type: ignore[union-attr]
+                self._bot_entity,
+                file=reader,
+                force_document=True,
+                file_name=remote.name,
+                file_size=remote.size,
+                part_size_kb=PART_SIZE_KB,
+                progress_callback=self._on_progress_thread,
+            )
+        )
+        try:
+            return await self._current_task
+        finally:
+            self._current_task = None
 
     async def _run_upload_path(self, path: str, remote: RemoteFile, size: int):
-        async def runner():
+        """Sube un fichero de disco: con piezas en paralelo si el tamaño lo permite."""
+        if self._s.upload_parallelism > 1 and size > 0:
+            with open(path, "rb") as fh:
+                handle = await upload_document(
+                    self._client,  # type: ignore[arg-type]
+                    self._bot_entity,
+                    fh,
+                    size=size,
+                    name=remote.name,
+                    parallelism=self._s.upload_parallelism,
+                    progress=self._on_progress_bytes,
+                )
             self._current_task = asyncio.ensure_future(
                 self._client.send_file(  # type: ignore[union-attr]
                     self._bot_entity,
-                    file=path,
+                    file=handle,
                     force_document=True,
                     file_name=remote.name,
-                    file_size=size,
-                    progress_callback=self._on_progress_thread,
                 )
             )
             try:
@@ -398,7 +518,33 @@ class TelegramUploader:
             finally:
                 self._current_task = None
 
-        return await runner()
+        self._current_task = asyncio.ensure_future(
+            self._client.send_file(  # type: ignore[union-attr]
+                self._bot_entity,
+                file=path,
+                force_document=True,
+                file_name=remote.name,
+                file_size=size,
+                part_size_kb=PART_SIZE_KB,
+                progress_callback=self._on_progress_thread,
+            )
+        )
+        try:
+            return await self._current_task
+        finally:
+            self._current_task = None
+
+    def _on_progress_bytes(self, current: int) -> None:
+        """Progreso de la subida paralela (bytes ya confirmados por Telegram)."""
+        cb = self._progress
+        main = self._main
+        if cb is None or main is None or main.is_closed():
+            return
+        now = time.monotonic()
+        if now - self._last_progress < PROGRESS_MIN_INTERVAL:
+            return
+        self._last_progress = now
+        asyncio.run_coroutine_threadsafe(cb(current), main)
 
     def _on_progress_thread(self, current: int, total: int) -> None:
         cb = self._progress
@@ -417,6 +563,22 @@ class TelegramUploader:
             loop.call_soon_threadsafe(task.cancel)
 
     # -- limpieza -----------------------------------------------------------------------
+
+    async def healthcheck(self) -> tuple[bool, str]:
+        """Comprueba la sesión MTProto y, si hace falta, la reconecta."""
+        if self._client is None or self._loop is None:
+            error = str(self._start_error) if self._start_error else "La sesión MTProto no está disponible."
+            self.last_error = error
+            return False, error
+        try:
+            if not self._client.is_connected():
+                await self._submit_and_wait(self._client.connect())
+            await self._submit_and_wait(self._client.get_me())
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = str(exc)
+            return False, str(exc)
+        self.last_error = ""
+        return True, ""
 
     async def cleanup(self, max_age: float | None) -> int:
         """Borra del chat del bot los archivos subidos (todos si ``max_age`` es None)."""

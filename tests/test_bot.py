@@ -13,7 +13,7 @@ from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.types import Update
 
-from app.admin import AdminRegistry
+from app.admin import AdminRegistry, BanRegistry
 from app.bot import Services, build_dispatcher
 from app.folders import FolderBrowser
 from app.jobs import JobManager
@@ -22,6 +22,18 @@ from tests.test_uploader import make_settings
 
 ADMIN_ID = 4242
 OTHER_ID = 777
+
+
+async def noop_restart() -> tuple[str, str]:
+    return "deploy", ""
+
+
+async def noop_healthcheck() -> tuple[bool, str]:
+    return True, ""
+
+
+async def noop_refresh() -> None:
+    return None
 
 
 class FakeSession(BaseSession):
@@ -59,11 +71,25 @@ def make_services(admin_ids: set[int] | None = None) -> tuple[Services, Bot, Fak
         jobs=jobs,
         folders=FolderBrowser(),
         admin=AdminRegistry(settings.admin_user_ids),
+        bans=BanRegistry(),
         status=lambda: {
             "bot": "mi_bot",
             "uptime_seconds": 120,
             "queue": {"pending_jobs": 0, "current_file": None},
             "mtproto": {"ok": True, "error": ""},
+        },
+        logs=lambda count: [],
+        resources=lambda: {"memory_mb": 32.0, "disk_free_mb": 1024},
+        restart=noop_restart,
+        healthcheck=noop_healthcheck,
+        refresh_commands=noop_refresh,
+        environment=lambda: {
+            "version": "1.1.0",
+            "python": "3.12",
+            "platform": "Linux",
+            "uptime_seconds": 120,
+            "mtproto_ok": True,
+            "mtproto_error": "",
         },
     )
     return services, bot, session
@@ -87,6 +113,28 @@ def make_update(bot: Bot, text: str, user_id: int) -> Update:
 
 def sent_texts(session: FakeSession) -> list[str]:
     return [getattr(r, "text", "") for r in session.requests]
+
+
+def make_callback(bot: Bot, data: str, user_id: int) -> Update:
+    return Update.model_validate(
+        {
+            "update_id": 2,
+            "callback_query": {
+                "id": "cb-1",
+                "from_user": {"id": user_id, "is_bot": False, "first_name": "U"},
+                "chat_instance": "1",
+                "data": data,
+                "message": {
+                    "message_id": 1,
+                    "date": 1700000000,
+                    "chat": {"id": user_id, "type": "private"},
+                    "from_user": {"id": bot.id, "is_bot": True, "first_name": "B"},
+                    "text": "…",
+                },
+            },
+        },
+        context={"bot": bot},
+    )
 
 
 def test_el_admin_puede_usar_los_comandos_de_administracion():
@@ -174,3 +222,109 @@ def _job(user_id: int, source) -> Any:
     from app.jobs import Job
 
     return Job(chat_id=user_id, user_id=user_id, source=source, files=[RemoteFile("a.bin", 1, "ref")])
+
+
+def test_el_reinicio_pide_confirmacion():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/reiniciar", ADMIN_ID))
+        texts = sent_texts(session)
+        assert any("¿Reiniciar" in t for t in texts)
+        assert any("rs:yes" == getattr(b, "callback_data", "") for r in session.requests
+                   for b in (getattr(getattr(r, "reply_markup", None), "inline_keyboard", None) or [[]])[0])
+
+    asyncio.run(go())
+
+
+def test_solo_el_admin_puede_confirmar_el_reinicio():
+    async def go():
+        calls: list[bool] = []
+
+        async def fake_restart() -> tuple[str, str]:
+            calls.append(True)
+            return "deploy", ""
+
+        services, bot, session = make_services()
+        services.restart = fake_restart
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_callback(bot, "rs:yes", OTHER_ID))
+        assert calls == []  # un usuario normal no reinicia el bot
+        assert any("administradores" in t for t in sent_texts(session))
+
+        await dp.feed_update(bot, make_callback(bot, "rs:yes", ADMIN_ID))
+        assert calls == [True]
+        assert any("Redeploy" in t for t in sent_texts(session))
+
+    asyncio.run(go())
+
+
+def test_el_reinicio_se_puede_cancelar():
+    async def go():
+        calls: list[bool] = []
+
+        async def fake_restart() -> tuple[str, str]:
+            calls.append(True)
+            return "deploy", ""
+
+        services, bot, session = make_services()
+        services.restart = fake_restart
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_callback(bot, "rs:no", ADMIN_ID))
+        assert calls == []
+        assert any("cancelado" in t.lower() for t in sent_texts(session))
+
+    asyncio.run(go())
+
+
+def test_un_usuario_bloqueado_no_puede_usar_el_bot():
+    async def go():
+        services, bot, session = make_services()
+        services.bans.ban(OTHER_ID, "spam")
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "hola", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts and "bloqueado" in texts[0]
+        assert not any("Envíame un enlace" in t for t in texts)
+
+    asyncio.run(go())
+
+
+def test_help_es_alias_de_ayuda():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/help", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts and "Envíame un enlace" in texts[0]
+
+    asyncio.run(go())
+
+
+def test_el_admin_tiene_los_nuevos_comandos():
+    """Cada comando nuevo responde al administrador (y no con el aviso de permisos)."""
+    expected = {
+        "/version": "Versión",
+        "/ping": "Pong",
+        "/stats": "Estadísticas",
+        "/logs": "líneas",
+        "/test_mtproto": "MTProto",
+        "/pausar": "pausa",
+        "/reanudar": "reanudada",
+        "/admins": "Administradores",
+        "/baneados": "bloqueado",
+        "/ban 999": "bloqueado",
+        "/unban 999": "no estaba",
+        "/cancelar_usuario 999": "no tenía",
+    }
+
+    async def go():
+        for command, fragment in expected.items():
+            services, bot, session = make_services()
+            dp = build_dispatcher(services)
+            await dp.feed_update(bot, make_update(bot, command, ADMIN_ID))
+            texts = " ".join(sent_texts(session))
+            assert fragment.lower() in texts.lower(), f"{command} no respondió: {texts!r}"
+            assert "🔒" not in texts, f"{command} fue bloqueado"
+
+    asyncio.run(go())

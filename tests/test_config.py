@@ -1,6 +1,8 @@
 """Configuración: validación de variables y normalización del secret del webhook."""
 import re
 
+import pytest
+
 from app.config import Settings, normalize_webhook_secret
 
 _ENV_OK = {
@@ -41,3 +43,43 @@ def test_from_env_sin_secret_sigue_en_none():
     s = Settings.from_env(dict(_ENV_OK))
     assert s.webhook_secret is None
     assert s.webhook_base_url is None
+
+
+def test_valores_por_defecto_de_rendimiento():
+    s = Settings.from_env(dict(_ENV_OK))
+    assert s.buffer_size == 16 * 1024 * 1024
+    assert s.zip_level == 1
+    assert s.upload_parallelism == 6
+    assert s.render_deploy_hook_url is None
+
+
+def test_se_leen_las_variables_de_rendimiento():
+    env = {**_ENV_OK, "BUFFER_MB": "32", "ZIP_LEVEL": "0", "MT_UPLOAD_PARALLEL": "4"}
+    s = Settings.from_env(env)
+    assert s.buffer_size == 32 * 1024 * 1024
+    assert s.zip_level == 0
+    assert s.upload_parallelism == 4
+
+
+def test_el_paralelismo_se_limita_al_maximo():
+    s = Settings.from_env({**_ENV_OK, "MT_UPLOAD_PARALLEL": "99"})
+    assert s.upload_parallelism == 8
+
+
+def test_zip_level_fuera_de_rango_es_error():
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**_ENV_OK, "ZIP_LEVEL": "10"})
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**_ENV_OK, "ZIP_LEVEL": "abc"})
+
+
+def test_paralelismo_invalido_es_error():
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**_ENV_OK, "MT_UPLOAD_PARALLEL": "0"})
+    with pytest.raises(RuntimeError):
+        Settings.from_env({**_ENV_OK, "MT_UPLOAD_PARALLEL": "abc"})
+
+
+def test_se_lee_el_deploy_hook():
+    s = Settings.from_env({**_ENV_OK, "RENDER_DEPLOY_HOOK_URL": " https://api.render.com/deploy/x "})
+    assert s.render_deploy_hook_url == "https://api.render.com/deploy/x"

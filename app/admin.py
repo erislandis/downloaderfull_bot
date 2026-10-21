@@ -13,26 +13,59 @@ from .utils import human_duration, human_size
 # Comandos restringidos al administrador. El middleware de app/bot.py usa esta lista para
 # decidir si un mensaje es un comando de administración (y entonces exigir permisos).
 ADMIN_COMMANDS: tuple[str, ...] = (
+    # control del servicio
     "admin",
+    "reiniciar",
+    "restart",
+    "version",
+    "ping",
+    "stats",
+    "logs",
+    "test_mtproto",
+    # cola y transferencias
     "cola",
     "usuarios",
+    "pausar",
+    "reanudar",
     "cancelar_todo",
+    "cancelar_usuario",
     "limpiar",
+    # comunicación
     "broadcast",
+    # permisos
     "permitir",
     "revocar",
+    "admins",
+    # moderación
+    "ban",
+    "unban",
+    "baneados",
 )
+
+# Prefijo de los callback_data de administración (confirmaciones).
+ADMIN_CB_PREFIX = "rs:"
 
 ADMIN_HELP = (
     "<b>🛠 Comandos de administración</b>\n"
+    "<b>Servicio</b>\n"
     "/admin – estado general del bot\n"
+    "/reiniciar – reinicia el servicio (pide confirmación)\n"
+    "/version – versión y entorno del bot\n"
+    "/ping – comprobación de vida y latencia\n"
+    "/stats – estadísticas de uso y recursos\n"
+    "/logs [n] – últimas líneas del registro\n"
+    "/test_mtproto – comprueba la sesión de las subidas grandes\n"
+    "<b>Cola</b>\n"
     "/cola – trabajos en cola y en curso\n"
     "/usuarios – usuarios y su actividad\n"
+    "/pausar · /reanudar – detiene o reanuda la cola\n"
     "/cancelar_todo – cancela todas las transferencias\n"
-    "/limpiar – borra los archivos almacenados en Telegram\n"
+    "/cancelar_usuario &lt;id&gt; – cancela las de un usuario\n"
+    "/limpiar [horas] – borra del almacén de Telegram\n"
+    "<b>Usuarios</b>\n"
     "/broadcast &lt;mensaje&gt; – avisa a todos los usuarios\n"
-    "/permitir &lt;id&gt; – da permisos de administración a un ID\n"
-    "/revocar &lt;id&gt; – quita esos permisos"
+    "/permitir · /revocar · /admins – permisos de administración\n"
+    "/ban · /unban · /baneados – bloqueo de usuarios"
 )
 
 
@@ -52,6 +85,25 @@ def command_of(text: str | None) -> str:
 def is_admin_command(text: str | None) -> bool:
     """¿El mensaje es uno de los comandos restringidos al administrador?"""
     return command_of(text) in ADMIN_COMMANDS
+
+
+def is_admin_callback(data: str | None) -> bool:
+    """¿El callback_query pertenece a la zona de administración?"""
+    return bool(data) and data.startswith(ADMIN_CB_PREFIX)
+
+
+def parse_int(text: str | None, default: int | None = None) -> int | None:
+    """Primer entero de un comando ("/limpiar 6" → 6). ``default`` si no hay ninguno."""
+    if not text:
+        return default
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return default
+    raw = parts[1].strip().split()[0] if parts[1].strip() else ""
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def parse_user_id(text: str | None) -> int | None:
@@ -107,6 +159,51 @@ class AdminRegistry:
         if user_id not in self._ids:
             return False
         self._ids.discard(user_id)
+        return True
+
+
+class BanRegistry:
+    """IDs bloqueados: no pueden usar el bot.
+
+    Como los permisos de administración, solo viven en memoria: un reinicio del
+    servicio los borra. Para que un bloqueo sea permanente hay que guardarlo
+    fuera (o volver a aplicarlo al arrancar).
+    """
+
+    def __init__(self, ids: Iterable[int] | None = None) -> None:
+        self._ids: set[int] = set(ids or ())
+        self._reason: dict[int, str] = {}
+
+    def __contains__(self, user_id: object) -> bool:
+        return user_id in self._ids
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+    @property
+    def ids(self) -> frozenset[int]:
+        return frozenset(self._ids)
+
+    def is_banned(self, user_id: int | None) -> bool:
+        return user_id is not None and user_id in self._ids
+
+    def reason(self, user_id: int) -> str:
+        return self._reason.get(user_id, "")
+
+    def ban(self, user_id: int, reason: str = "") -> bool:
+        """Bloquea a un usuario. Devuelve False si ya estaba bloqueado."""
+        if user_id in self._ids:
+            return False
+        self._ids.add(user_id)
+        self._reason[user_id] = reason
+        return True
+
+    def unban(self, user_id: int) -> bool:
+        """Desbloquea a un usuario. Devuelve False si no lo estaba."""
+        if user_id not in self._ids:
+            return False
+        self._ids.discard(user_id)
+        self._reason.pop(user_id, None)
         return True
 
 
@@ -170,3 +267,92 @@ def format_users(users: list[Mapping[str, object]]) -> str:
             f"{user.get('ok')} ok, {user.get('failed')} fallido(s)"
         )
     return "\n".join(lines)
+
+
+def format_version(
+    *,
+    version: str,
+    python: str,
+    platform: str,
+    uptime_seconds: int,
+    mtproto_ok: bool,
+    mtproto_error: str,
+) -> str:
+    """Versión y entorno del bot (/version)."""
+    mtproto = "✅ listo" if mtproto_ok else f"⚠️ {escape(mtproto_error or 'sin detalle')}"
+    return "\n".join(
+        [
+            "<b>ℹ️ Versión</b>",
+            f"· BridgeBot {escape(version)}",
+            f"· Python {escape(python)}",
+            f"· Sistema {escape(platform)}",
+            f"· En marcha desde hace {human_duration(uptime_seconds)}",
+            f"· MTProto: {mtproto}",
+        ]
+    )
+
+
+def format_stats(
+    *,
+    uptime_seconds: int,
+    jobs_ok: int,
+    jobs_failed: int,
+    bytes_sent: int,
+    seconds_active: float,
+    users: int,
+    admins: int,
+    queue_pending: int,
+    queue_paused: bool,
+    mtproto_ok: bool,
+    memory_mb: float | None = None,
+    disk_free_mb: int | None = None,
+    upload_parallelism: int = 1,
+    zip_level: int = 1,
+) -> str:
+    """Estadísticas de uso y recursos del servidor (/stats)."""
+    speed = bytes_sent / seconds_active if seconds_active > 0 else 0.0
+    lines = [
+        "<b>📊 Estadísticas</b>",
+        f"· En marcha desde hace {human_duration(uptime_seconds)}",
+        f"· Transferencias: {jobs_ok} ok · {jobs_failed} fallida(s)",
+        f"· Enviado: {human_size(bytes_sent)} · media {human_size(int(speed))}/s",
+        f"· Usuarios conocidos: {users} · administradores: {admins}",
+        f"· Cola: {queue_pending} pendiente(s)" + (" · ⏸ en pausa" if queue_paused else ""),
+        f"· MTProto: {'✅ listo' if mtproto_ok else '⚠️ no disponible'}",
+        f"· Trozos simultáneos: {upload_parallelism} · compresión ZIP: {zip_level or 'sin comprimir'}",
+    ]
+    if memory_mb is not None:
+        lines.append(f"· Memoria en uso: {memory_mb:.0f} MB")
+    if disk_free_mb is not None:
+        lines.append(f"· Disco libre: {disk_free_mb} MB")
+    return "\n".join(lines)
+
+
+def format_logs(lines: list[str]) -> str:
+    """Últimas líneas del registro (/logs)."""
+    if not lines:
+        return "📓 No hay líneas guardadas todavía."
+    body = "\n".join(escape(line) for line in lines)
+    return f"<b>📓 Últimas {len(lines)} líneas</b>\n<pre>{body}</pre>"
+
+
+def format_bans(bans: list[Mapping[str, object]]) -> str:
+    """Lista de usuarios bloqueados (/baneados)."""
+    if not bans:
+        return "🚫 No hay ningún usuario bloqueado."
+    lines = [f"<b>🚫 Bloqueados ({len(bans)})</b>"]
+    for ban in bans:
+        reason = str(ban.get("reason") or "")
+        suffix = f" — {escape(reason)}" if reason else ""
+        lines.append(f"· <code>{ban.get('id')}</code>{suffix}")
+    return "\n".join(lines)
+
+
+def format_admins(admins: Iterable[int]) -> str:
+    """Lista de administradores (/admins)."""
+    ids = sorted(admins)
+    if not ids:
+        return "🛠 No hay ningún administrador configurado."
+    return "\n".join(
+        [f"<b>🛠 Administradores ({len(ids)})</b>"] + [f"· <code>{i}</code>" for i in ids]
+    )

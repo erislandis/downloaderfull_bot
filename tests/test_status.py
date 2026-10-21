@@ -17,7 +17,7 @@ def test_runtime_status_refleja_version_y_cola():
             state = runtime.status()
             assert state["ok"] is True
             assert state["status"] == "online"
-            assert state["queue"] == {"pending_jobs": 0, "current_file": None}
+            assert state["queue"] == {"pending_jobs": 0, "current_file": None, "paused": False}
             assert "MediaFire" in state["sources"] and "Mega" in state["sources"]
             assert state["uptime_seconds"] >= 0
             assert state["version"]

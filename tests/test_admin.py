@@ -7,11 +7,19 @@ from __future__ import annotations
 from app.admin import (
     ADMIN_COMMANDS,
     AdminRegistry,
+    BanRegistry,
     command_of,
+    format_admins,
     format_admin_panel,
+    format_bans,
+    format_logs,
     format_queue,
+    format_stats,
     format_users,
+    format_version,
+    is_admin_callback,
     is_admin_command,
+    parse_int,
     parse_user_id,
 )
 
@@ -57,7 +65,30 @@ def test_se_parsean_los_ids_de_usuario():
 
 
 def test_todos_los_comandos_de_administracion_estan_listados():
-    for name in ("admin", "cola", "usuarios", "cancelar_todo", "limpiar", "broadcast", "permitir", "revocar"):
+    for name in (
+        "admin",
+        "reiniciar",
+        "restart",
+        "version",
+        "ping",
+        "stats",
+        "logs",
+        "test_mtproto",
+        "cola",
+        "usuarios",
+        "pausar",
+        "reanudar",
+        "cancelar_todo",
+        "cancelar_usuario",
+        "limpiar",
+        "broadcast",
+        "permitir",
+        "revocar",
+        "admins",
+        "ban",
+        "unban",
+        "baneados",
+    ):
         assert name in ADMIN_COMMANDS
 
 
@@ -127,3 +158,86 @@ def test_informe_de_usuarios():
     assert "Usuarios (2)" in text
     assert "3 envío(s)" in text
     assert "1 fallido(s)" in text
+
+
+def test_se_parsea_el_numero_de_lineas():
+    assert parse_int("/logs 40") == 40
+    assert parse_int("/logs") is None
+    assert parse_int("/logs 40", 20) == 40
+    assert parse_int("/logs abc", 20) == 20
+
+
+def test_se_detectan_los_callback_de_administracion():
+    assert is_admin_callback("rs:yes")
+    assert is_admin_callback("rs:no")
+    assert not is_admin_callback("fb:abc")
+    assert not is_admin_callback(None)
+
+
+def test_registro_de_bloqueos():
+    bans = BanRegistry()
+    assert bans.ban(9, "spam") is True
+    assert bans.ban(9) is False
+    assert bans.is_banned(9) and not bans.is_banned(10)
+    assert bans.reason(9) == "spam"
+    assert bans.ids == {9}
+    assert bans.unban(9) is True
+    assert bans.unban(9) is False
+    assert not bans.is_banned(9)
+    assert bans.reason(9) == ""
+
+
+def test_informe_de_estadisticas():
+    text = format_stats(
+        uptime_seconds=3700,
+        jobs_ok=3,
+        jobs_failed=1,
+        bytes_sent=10 * 1024 * 1024,
+        seconds_active=10.0,
+        users=2,
+        admins=1,
+        queue_pending=0,
+        queue_paused=True,
+        mtproto_ok=True,
+        memory_mb=48.0,
+        disk_free_mb=512,
+        upload_parallelism=6,
+        zip_level=1,
+    )
+    assert "3 ok" in text and "1 fallida" in text
+    assert "en pausa" in text
+    assert "Memoria" in text and "48" in text
+    assert "Disco libre" in text and "512" in text
+    assert "Trozos simultáneos: 6" in text
+
+
+def test_informe_de_registro_vacio_y_con_lineas():
+    assert "No hay líneas" in format_logs([])
+    text = format_logs(["hola <b>", "mundo"])
+    assert "<pre>" in text and "&lt;b&gt;" in text
+
+
+def test_informe_de_bloqueados():
+    assert "No hay ningún usuario" in format_bans([])
+    text = format_bans([{"id": 5, "reason": "spam"}])
+    assert "Bloqueados (1)" in text and "5" in text and "spam" in text
+
+
+def test_informe_de_administradores():
+    assert "No hay ningún administrador" in format_admins([])
+    text = format_admins([7, 3])
+    assert "Administradores (2)" in text
+    assert text.index("3") < text.index("7")
+
+
+def test_informe_de_version():
+    text = format_version(
+        version="1.2.3",
+        python="3.12.0",
+        platform="Linux",
+        uptime_seconds=65,
+        mtproto_ok=False,
+        mtproto_error="sin sesión",
+    )
+    assert "1.2.3" in text and "3.12.0" in text
+    assert "sin sesión" in text

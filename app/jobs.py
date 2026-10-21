@@ -26,6 +26,7 @@ RETRY_BASE_DELAY = 2.0  # espera tras el primer reintento (se duplica cada vez)
 HISTORY_PER_USER = 5  # envíos recientes guardados por usuario
 HISTORY_USERS = 200  # usuarios con historial (tope de memoria)
 MAX_JOBS_PER_USER = 3  # transferencias en cola por usuario (el bot es público)
+BROADCAST_PAUSE = 0.05  # segundos entre avisos: Telegram limita ~30 mensajes/s
 
 
 @dataclass
@@ -91,6 +92,40 @@ class JobManager:
         self._history: dict[int, list[dict[str, object]]] = {}  # user_id -> últimos envíos
         self._users: dict[int, dict[str, object]] = {}  # user_id -> resumen de actividad
         self._history_lock = threading.Lock()
+        # Pausa de la cola: el evento está puesto cuando la cola está activa.
+        self._resume = asyncio.Event()
+        self._resume.set()
+        self._stats: dict[str, float] = {
+            "ok": 0,
+            "failed": 0,
+            "bytes": 0,
+            "seconds": 0.0,
+            "download": 0.0,
+            "upload": 0.0,
+        }
+        self._stats_lock = threading.Lock()
+
+    @property
+    def paused(self) -> bool:
+        return not self._resume.is_set()
+
+    def pause(self) -> bool:
+        """Detiene la cola (el trabajo en curso termina). Devuelve True si cambió."""
+        if self.paused:
+            return False
+        self._resume.clear()
+        return True
+
+    def resume(self) -> bool:
+        """Reanuda la cola. Devuelve True si estaba pausada."""
+        if not self.paused:
+            return False
+        self._resume.set()
+        return True
+
+    def stats_snapshot(self) -> dict[str, float]:
+        with self._stats_lock:
+            return dict(self._stats)
 
     @property
     def busy(self) -> bool:
@@ -166,6 +201,7 @@ class JobManager:
                 log.warning("No pude enviar el aviso al usuario %d", user_id, exc_info=True)
             else:
                 sent += 1
+            await asyncio.sleep(BROADCAST_PAUSE)  # no saturar el límite de Telegram
         return sent, failed
 
     def cancel_user(self, user_id: int) -> int:
@@ -237,9 +273,29 @@ class JobManager:
                     if old != job.user_id:
                         del self._users[old]
 
+    def _count(self, *, done: int, failed: bool) -> None:
+        """Acumula las estadísticas del envío (para /stats)."""
+        if failed:
+            with self._stats_lock:
+                self._stats["failed"] += 1
+            return
+        timing = getattr(self._uploader, "last_timing", None)
+        upload_seconds = max(float(getattr(timing, "upload", 0.0) or 0.0), 0.0)
+        download_seconds = min(float(getattr(timing, "download", 0.0) or 0.0), upload_seconds)
+        with self._stats_lock:
+            self._stats["ok"] += 1
+            self._stats["bytes"] += max(int(done), 0)
+            self._stats["seconds"] += upload_seconds
+            self._stats["download"] += download_seconds
+            self._stats["upload"] += max(upload_seconds - download_seconds, 0.0)
+
     async def run_forever(self) -> None:
         while True:
+            await self._resume.wait()  # cola en pausa: no se toma ningún trabajo
             job = await self._queue.get()
+            if self.paused:  # se pausó mientras esperábamos: el trabajo sigue en cola
+                self._queue.put_nowait(job)
+                continue
             try:
                 if job.cancelled:
                     await self._notify(job.chat_id, "🛑 Trabajo cancelado antes de empezar.")
@@ -250,6 +306,10 @@ class JobManager:
                     await self._task
                 except asyncio.CancelledError:
                     self._uploader.cancel_current()
+                    if self._task is not None:
+                        # Si nos cancelan a *nosotros* (cierre de la app) el trabajo
+                        # interno sigue vivo: se corta también.
+                        self._task.cancel()
                     if not job.cancelled:
                         raise  # cierre real de la aplicación
                     await self._notify(job.chat_id, "🛑 Transferencia cancelada.")
@@ -285,6 +345,7 @@ class JobManager:
                 job.state = "failed"
                 job.note = str(exc)
                 self._remember(job, "failed", str(exc))
+                self._count(done=0, failed=True)
                 if status is not None:
                     await _safe_edit(status, f"{header}\n⚠️ {escape(str(exc))}{wait}")
                 if total - index:
@@ -294,6 +355,7 @@ class JobManager:
                 job.state = "failed"
                 job.note = str(exc)
                 self._remember(job, "failed", str(exc))
+                self._count(done=0, failed=True)
                 if status is not None:
                     await _safe_edit(status, f"{header}\n❌ {escape(str(exc))}")
                 continue
@@ -301,6 +363,7 @@ class JobManager:
             job.state = "done"
             job.note = ""
             self._remember(job, "done")
+            self._count(done=done, failed=False)
             if status is not None:
                 await _safe_edit(status, f"✅ <b>{title}</b> ({human_size(done)}) enviado como documento.")
 

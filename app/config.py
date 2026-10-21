@@ -25,7 +25,14 @@ _HASH_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 _PLACEHOLDER_RE = re.compile(r"^(pon_aqui|tu_api|tu_token|tu_string|xxx|change_?me)", re.IGNORECASE)
 # Telegram exige que secret_token solo lleve estos caracteres (1-256)
 _TELEGRAM_SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
-_DEFAULT_BUFFER_MB = 4.0
+_DEFAULT_BUFFER_MB = 16.0
+# Trozos simultáneos de la subida por MTProto. Telegram acepta varias piezas en
+# vuelo; 6 es un buen punto medio entre velocidad y riesgo de límites.
+_DEFAULT_UPLOAD_PARALLELISM = 6
+_MAX_UPLOAD_PARALLELISM = 8
+# Nivel de compresión de los ZIP: 0 = STORE (sin comprimir). Render gratuito da
+# 0,1 CPU, así que comprimir de más sale carísimo y los medios ya van comprimidos.
+_DEFAULT_ZIP_LEVEL = 1
 
 
 def _placeholder(value: str) -> bool:
@@ -60,6 +67,9 @@ class Settings:
     max_file_bytes: int
     buffer_size: int
     ttl_hours: float
+    zip_level: int
+    upload_parallelism: int
+    render_deploy_hook_url: str | None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -104,6 +114,24 @@ class Settings:
 
         base = env.get("WEBHOOK_BASE_URL") or env.get("RENDER_EXTERNAL_URL")
         secret = (env.get("WEBHOOK_SECRET") or "").strip()
+
+        try:
+            zip_level = int(env.get("ZIP_LEVEL", str(_DEFAULT_ZIP_LEVEL)))
+        except ValueError:
+            raise RuntimeError("ZIP_LEVEL debe ser un número entero entre 0 y 9.") from None
+        if not 0 <= zip_level <= 9:
+            raise RuntimeError("ZIP_LEVEL debe estar entre 0 (sin comprimir) y 9.")
+
+        try:
+            parallelism = int(env.get("MT_UPLOAD_PARALLEL", str(_DEFAULT_UPLOAD_PARALLELISM)))
+        except ValueError:
+            raise RuntimeError("MT_UPLOAD_PARALLEL debe ser un número entero.") from None
+        if parallelism < 1:
+            raise RuntimeError("MT_UPLOAD_PARALLEL debe ser al menos 1.")
+        parallelism = min(parallelism, _MAX_UPLOAD_PARALLELISM)
+
+        hook = (env.get("RENDER_DEPLOY_HOOK_URL") or "").strip() or None
+
         return cls(
             bot_token=env["BOT_TOKEN"].strip(),
             telegram_api_id=api_id,
@@ -116,4 +144,7 @@ class Settings:
             max_file_bytes=int(float(env.get("MAX_FILE_MB", "2048")) * 1024 * 1024),
             buffer_size=buffer,
             ttl_hours=float(env.get("TTL_HOURS", "6")),
+            zip_level=zip_level,
+            upload_parallelism=parallelism,
+            render_deploy_hook_url=hook,
         )

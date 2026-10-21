@@ -21,6 +21,9 @@ def make_settings(**over) -> Settings:
         max_file_bytes=2048 * 1024 * 1024,
         buffer_size=4 * 1024 * 1024,
         ttl_hours=6.0,
+        zip_level=1,
+        upload_parallelism=6,
+        render_deploy_hook_url=None,
     )
     return replace(base, **over)
 
@@ -220,4 +223,56 @@ def test_fallo_en_mtproto_no_deja_hilos_atascados_en_el_puente():
             raise AssertionError("debía propagar el fallo")
         # Si feed() quedara bloqueado, el hilo seguiría vivo: comprobamos que cierra limpio.
         await asyncio.wait_for(loop.run_in_executor(None, lambda: None), timeout=5)
+    asyncio.run(go())
+
+
+class FakeParallelClient:
+    """Cliente falso: solo se usa ``send_file`` (la subida ya la hizo upload_document)."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple] = []
+
+    async def send_file(self, entity, file=None, **kwargs):
+        self.sent.append((entity, file, kwargs))
+        return FakeMessage(77)
+
+
+def test_subida_paralela_reparte_los_trozos_y_publica_una_sola_vez(monkeypatch):
+    async def go():
+        bot = FakeBot()
+        up = TelegramUploader(
+            make_settings(bot_api_max_bytes=100, buffer_size=256, upload_parallelism=4), bot
+        )
+        loop = asyncio.get_running_loop()
+        up._main = up._loop = loop
+        up._client = FakeParallelClient()
+        up._bot_entity = object()
+        up._me_id = 999
+        captured: dict[str, object] = {}
+        handle = object()
+
+        async def fake_upload_document(
+            client, endpoint, reader, *, size, name, part_size=None, parallelism=4, progress=None
+        ):
+            captured["size"] = size
+            captured["name"] = name
+            captured["parallelism"] = parallelism
+            captured["data"] = await asyncio.to_thread(reader.readall)
+            return handle
+
+        monkeypatch.setattr("app.uploader.upload_document", fake_upload_document)
+        data = os.urandom(5000)
+        total = await up.upload(FakeSource(data), RemoteFile("big.bin", len(data), "ref"), chat_id=7)
+
+        assert total == len(data)
+        assert captured["data"] == data
+        assert captured["parallelism"] == 4
+        assert captured["size"] == len(data)
+        # El documento ya subido solo se publica: `send_file` recibe el identificador.
+        assert len(up._client.sent) == 1
+        assert up._client.sent[0][1] is handle
+        assert bot.forwarded == [(7, 999, 77)]
+        # Y quedan registrados los tiempos para /stats.
+        assert up.last_timing.bytes_uploaded == len(data)
+
     asyncio.run(go())

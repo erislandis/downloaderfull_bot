@@ -41,7 +41,7 @@ API_URL = "https://g.api.mega.co.nz/cs"
 MAX_TREE_NODES = 20_000
 
 log = logging.getLogger(__name__)
-READ_CHUNK = 256 * 1024
+READ_CHUNK = 1024 * 1024  # 1 MiB: menos llamadas y mejor rendimiento en la CDN de Mega
 
 _FILE_RE = re.compile(r"mega\.(?:nz|co\.nz)/(?:#!|file/)([\w-]{8})[!#]([\w-]{43})")
 _FOLDER_RE = re.compile(
@@ -335,7 +335,12 @@ class MegaSource(Source):
         if isinstance(file, BundleFile):
             if offset:
                 raise ResumeNotSupported("Un archivo comprimido no se puede reanudar.")
-            async for chunk in zip_stream(file.members, self._open_member):
+            async for chunk in zip_stream(
+                file.members,
+                self._open_member,
+                compress=self._zip_level > 0,
+                level=self._zip_level,
+            ):
                 yield chunk
             return
 

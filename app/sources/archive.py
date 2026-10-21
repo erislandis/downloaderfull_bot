@@ -113,15 +113,20 @@ async def zip_stream(
     members: Sequence[RemoteFile],
     opener: Callable[[RemoteFile], AsyncIterator[bytes]],
     compress: bool = True,
+    level: int = 6,
 ) -> AsyncIterator[bytes]:
     """Genera el ZIP byte a byte: `opener` da el contenido de cada miembro.
 
     `opener` se llama una vez por miembro y debe devolver un iterador asíncrono de bytes.
+    `level` es el nivel de deflate (0-9): en el plan gratuito de Render, 1 es mucho más
+    rápido que 6 y la diferencia de tamaño suele ser pequeña para vídeos e imágenes.
     """
     if len(members) > _MAX_ENTRIES:
         raise ArchiveError(f"Un ZIP admite como máximo {_MAX_ENTRIES} archivos (aquí hay {len(members)}).")
 
     clock, date = _dos_datetime()
+    compress = compress and level > 0
+    level = max(0, min(int(level), 9))
     method = _METHOD_DEFLATE if compress else _METHOD_STORE
     central: list[bytes] = []
     offset = 0
@@ -136,7 +141,7 @@ async def zip_stream(
         crc = 0
         usize = 0
         csize = 0
-        compressor = zlib.compressobj(6, zlib.DEFLATED, -15) if compress else None
+        compressor = zlib.compressobj(level, zlib.DEFLATED, -15) if compress else None
         async for chunk in opener(remote):
             if not chunk:
                 continue

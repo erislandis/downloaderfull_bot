@@ -1,5 +1,6 @@
 """Reintentos ante errores transitorios en la cola de trabajos."""
 import asyncio
+import contextlib
 
 from app.errors import SourceError, TransientError
 from app.jobs import Job, JobManager
@@ -193,4 +194,61 @@ def test_la_cola_sigue_viva_despues_de_entregar():
                 break
         assert uploader.calls == 1
         task.cancel()
+    asyncio.run(go())
+
+
+def test_la_cola_se_puede_pausar_y_reanudar():
+    async def go():
+        mgr, _bot = make_manager(FlakyUploader(fail_times=0))
+        assert not mgr.paused
+        assert mgr.pause() is True
+        assert mgr.paused
+        assert mgr.pause() is False  # ya estaba en pausa
+        assert mgr.resume() is True
+        assert not mgr.paused
+        assert mgr.resume() is False  # no estaba en pausa
+
+    asyncio.run(go())
+
+
+def test_las_estadisticas_acumulan_los_envios():
+    async def go():
+        mgr, _bot = make_manager(FlakyUploader(fail_times=0))
+        await mgr._run(make_job())
+        stats = mgr.stats_snapshot()
+        assert stats["ok"] == 1 and stats["failed"] == 0
+        assert stats["bytes"] == 10
+
+    asyncio.run(go())
+
+
+def test_las_estadisticas_cuentan_los_fallos():
+    async def go():
+        mgr, _bot = make_manager(FlakyUploader(fail_times=99, error=SourceError("roto")))
+        await mgr._run(make_job())
+        stats = mgr.stats_snapshot()
+        assert stats["ok"] == 0 and stats["failed"] == 1
+        assert stats["bytes"] == 0
+
+    asyncio.run(go())
+
+
+def test_la_cola_pausada_no_procesa_trabajos():
+    async def go():
+        uploader = FlakyUploader(fail_times=0)
+        mgr, _bot = make_manager(uploader)
+        mgr.pause()
+        task = asyncio.create_task(mgr.run_forever())
+        try:
+            mgr.submit(make_job())
+            await asyncio.sleep(0.05)
+            assert uploader.calls == 0  # en pausa no empieza nada
+            mgr.resume()
+            await asyncio.sleep(0.05)
+            assert uploader.calls == 1  # al reanudar arranca
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
     asyncio.run(go())
