@@ -93,3 +93,57 @@ def test_uptime_human():
     assert _uptime_human(5) == "5 s"
     assert _uptime_human(125) == "2 min 5 s"
     assert _uptime_human(7322) == "2 h 2 min"
+
+
+def test_el_webhook_se_registra_sin_tirar_el_servicio():
+    """Si el registro falla (red caída) el bot arranca igual y reintenta después."""
+    settings = make_settings(
+        bot_token="123456:ABCdefGHIjklMNOpqrSTUvwxYZ123456",
+        webhook_base_url="https://mi-bot.onrender.com",
+        webhook_secret="secreto",
+    )
+
+    async def go():
+        runtime = Runtime(settings)
+        try:
+            calls: list[dict] = []
+
+            async def fake_set_webhook(**kwargs):
+                calls.append(kwargs)
+                raise ConnectionError("sin red")
+
+            runtime.bot.set_webhook = fake_set_webhook  # type: ignore[method-assign]
+            assert await runtime.ensure_webhook() is False
+            assert runtime.webhook_ok is False
+            assert calls[0]["url"] == "https://mi-bot.onrender.com/webhook"
+            assert calls[0]["secret_token"] == "secreto"
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(go())
+
+
+def test_el_webhook_queda_registrado_si_todo_va_bien():
+    settings = make_settings(
+        bot_token="123456:ABCdefGHIjklMNOpqrSTUvwxYZ123456",
+        webhook_base_url="https://mi-bot.onrender.com",
+        webhook_secret="secreto",
+    )
+
+    async def go():
+        runtime = Runtime(settings)
+        try:
+            calls: list[dict] = []
+
+            async def fake_set_webhook(**kwargs):
+                calls.append(kwargs)
+                return True
+
+            runtime.bot.set_webhook = fake_set_webhook  # type: ignore[method-assign]
+            assert await runtime.ensure_webhook() is True
+            assert runtime.webhook_ok is True
+            assert calls[0]["url"] == "https://mi-bot.onrender.com/webhook"
+        finally:
+            await runtime.aclose()
+
+    asyncio.run(go())

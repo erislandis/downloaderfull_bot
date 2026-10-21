@@ -27,19 +27,20 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from aiogram.types import BufferedInputFile
-from telethon import TelegramClient
-from telethon.sessions import StringSession
 
 from .config import Settings
 from .errors import TransientError, UploadError
 from .mtproto_upload import upload_document
 from .sources.base import BundleFile, RemoteFile, Source
 from .streams import StreamReader
+
+if TYPE_CHECKING:  # pragma: no cover
+    from telethon import TelegramClient
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +119,12 @@ class TelegramUploader:
         self._bot_entity = await self._submit_and_wait(self._client.get_entity(self._bot_username))  # type: ignore[union-attr]
 
     def _run_thread(self, ready: threading.Event) -> None:
+        # Telethon se importa aquí y no al importar el módulo: en el plan gratuito de
+        # Render la CPU es muy justa y la importación tarda decenas de segundos. Con el
+        # import perezoso el servidor web abre el puerto mucho antes.
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop

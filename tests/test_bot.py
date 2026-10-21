@@ -322,6 +322,10 @@ def test_el_admin_tiene_los_nuevos_comandos():
         for command, fragment in expected.items():
             services, bot, session = make_services()
             dp = build_dispatcher(services)
+            if command == "/reanudar":
+                # La cola arranca en marcha: hay que pausarla para que /reanudar
+                # tenga algo que reanudar.
+                services.jobs.pause()
             await dp.feed_update(bot, make_update(bot, command, ADMIN_ID))
             texts = " ".join(sent_texts(session))
             assert fragment.lower() in texts.lower(), f"{command} no respondió: {texts!r}"

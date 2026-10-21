@@ -225,6 +225,10 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
   agotan pronto. El bot informa del tiempo de espera cuando Mega lo indica. Además, las carpetas de Mega
   se montan encriptadas con la clave del enlace: si la clave no es correcta, el bot lo avisa.
 - **GitHub solo aloja el código**, no los archivos (límite de 100 MB por archivo).
+- **Arranque:** el servidor web abre el puerto antes de cargar Telethon (que es pesado) para que
+  Render no tarde en detectarlo. Si al arrancar no se puede registrar el webhook en Telegram
+  (la red del plan gratuito se cae a menudo), el servicio **no se cae**: lo reintenta cada
+  minuto durante media hora.
 - **Seguridad:** el bot es público, así que cada usuario puede mandar como mucho 3 transferencias
   en cola a la vez y los comandos de administración (`ADMIN_USER_IDS`) están restringidos al
   administrador; nunca subas el `.env`.

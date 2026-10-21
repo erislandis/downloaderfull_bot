@@ -19,13 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
-
-from telethon import helpers
-from telethon.errors import FloodWaitError, ServerError
-from telethon.tl import functions, types
+from typing import TYPE_CHECKING, Any, Callable
 
 from .errors import UploadError
+
+if TYPE_CHECKING:  # pragma: no cover
+    from telethon.tl import types
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +50,12 @@ async def upload_document(
 
     Devuelve el ``InputFileBig`` ya subido, listo para enviarse con ``send_file``.
     """
+    # Telethon se importa aquí (y no al importar el módulo): en el plan gratuito de
+    # Render la CPU es muy justa y arrastrar Telethon al arrancar retrasa la apertura
+    # del puerto del servidor web.
+    from telethon import helpers
+    from telethon.tl import types
+
     if size <= 0:
         raise UploadError("El archivo está vacío: no hay nada que subir.")
     part_size = max(1024, min(int(part_size), PART_SIZE))
@@ -129,6 +134,9 @@ async def _send_part(
     report: Callable[[int], None] | None = None,
 ) -> None:
     """Envía una pieza, reintentando si el fallo es pasajero."""
+    from telethon.errors import FloodWaitError, ServerError
+    from telethon.tl import functions
+
     request = functions.upload.SaveBigFilePartRequest(file_id, index, part_count, part)
     delay = 1.0
     for attempt in range(PART_ATTEMPTS):

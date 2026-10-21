@@ -27,6 +27,8 @@ except ImportError:  # ejecutado como script suelto: `python app/main.py`
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+log = logging.getLogger(__name__)
+
 STATUS_PAGE = """<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -105,12 +107,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime = Runtime(settings)
     app.state.runtime = runtime
     await runtime.start()
-    await runtime.bot.set_webhook(
-        url=f"{settings.webhook_base_url}/webhook",
-        secret_token=settings.webhook_secret,
-        allowed_updates=runtime.dp.resolve_used_update_types(),
-    )
-    runtime.start_background()
+    # Registrar el webhook no puede tumbar el servicio: si la red falla, se reintenta
+    # en segundo plano (Render reinicia el proceso y entraría en bucle de fallos).
+    if not await runtime.ensure_webhook():
+        log.warning("El webhook no se pudo registrar; se reintentará en segundo plano.")
+    runtime.start_background(webhook=True)
     try:
         yield
     finally:

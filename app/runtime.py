@@ -32,6 +32,8 @@ CLEANUP_EVERY = 30 * 60
 KEEPALIVE_EVERY = 4 * 60
 API_TIMEOUT = 900.0  # segundos: margen para subir 50 MB por la Bot API con poca banda
 LOG_LINES = 300  # líneas de registro que se guardan para /logs
+WEBHOOK_RETRY_EVERY = 60  # segundos entre reintentos de registro del webhook
+WEBHOOK_RETRY_LIMIT = 30  # intentos antes de rendirse (30 min)
 
 
 class RingBufferHandler(logging.Handler):
@@ -128,6 +130,7 @@ class Runtime:
                 status=self.status,
                 logs=self.log_handler.tail,
                 resources=self.resources,
+                environment=self.environment,
                 restart=self.request_restart,
                 healthcheck=self.healthcheck_mtproto,
                 refresh_commands=self.sync_commands,
@@ -135,6 +138,33 @@ class Runtime:
         )
         self._tasks: list[asyncio.Task[None]] = []
         self.mtproto_error: str = ""
+        self.webhook_ok: bool = False
+
+    async def ensure_webhook(self) -> bool:
+        """Registra el webhook de Telegram. Devuelve ``False`` si no se pudo.
+
+        No lanza excepciones: un fallo puntual de la red (típico en el plan gratuito
+        de Render) no debe tumbar el servicio, solo dejar el bot sin updates hasta
+        el siguiente reintento.
+        """
+        base = self.settings.webhook_base_url
+        secret = self.settings.webhook_secret
+        if not base or not secret:
+            log.error("Falta WEBHOOK_BASE_URL o WEBHOOK_SECRET: no puedo registrar el webhook.")
+            return False
+        try:
+            await self.bot.set_webhook(
+                url=f"{base}/webhook",
+                secret_token=secret,
+                allowed_updates=self.dp.resolve_used_update_types(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("No pude registrar el webhook en Telegram: %s", exc)
+            self.webhook_ok = False
+            return False
+        self.webhook_ok = True
+        log.info("Webhook registrado en %s/webhook", base)
+        return True
 
     async def start(self) -> None:
         """Conecta la sesión MTProto y resuelve la identidad del bot (una sola vez).
@@ -256,11 +286,13 @@ class Runtime:
         self.mtproto_error = "" if ok else detail
         return ok, detail
 
-    def start_background(self) -> None:
+    def start_background(self, *, webhook: bool = False) -> None:
         self._tasks = [
             asyncio.create_task(self.jobs.run_forever(), name="jobs"),
             asyncio.create_task(self._cleanup_loop(), name="cleanup"),
         ]
+        if webhook:
+            self._tasks.append(asyncio.create_task(self._webhook_loop(), name="webhook"))
         if self.settings.webhook_base_url:
             self._tasks.append(asyncio.create_task(self._keepalive_loop(), name="keepalive"))
 
@@ -294,3 +326,23 @@ class Runtime:
                     await self.http.get(url)
                 except httpx.HTTPError:
                     log.debug("Keepalive falló", exc_info=True)
+
+    async def _webhook_loop(self) -> None:
+        """Reintenta registrar el webhook si al arrancar no se pudo.
+
+        Si el registro funciona a la primera, la tarea termina enseguida. Si falla
+        (la red de Render se cae a menudo), se reintenta cada minuto durante media
+        hora en vez de dejar el bot muerto.
+        """
+        if self.webhook_ok:
+            return
+        for attempt in range(1, WEBHOOK_RETRY_LIMIT + 1):
+            await asyncio.sleep(WEBHOOK_RETRY_EVERY)
+            if await self.ensure_webhook():
+                return
+            log.warning("Reintento %d/%d del registro del webhook", attempt, WEBHOOK_RETRY_LIMIT)
+        log.error(
+            "No pude registrar el webhook tras %d intentos: el bot no recibirá mensajes "
+            "hasta que se reinicie el servicio.",
+            WEBHOOK_RETRY_LIMIT,
+        )
