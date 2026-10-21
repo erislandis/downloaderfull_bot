@@ -183,6 +183,13 @@ Para el resto de usuarios, esos comandos no existen y el bot se comporta con nor
 
 Para que un permiso sea permanente hay que añadir el ID a `ADMIN_USER_IDS` y reiniciar el servicio.
 
+**Si el bot no te reconoce como administrador:**
+1. Envía `/start`: el bot te dice tu ID numérico. Debe ser ese número, no tu `@usuario`.
+2. En Render → **Environment**, comprueba que está en `ADMIN_USER_IDS` (separados por comas si hay varios).
+3. Tras cambiar la variable, haz **Manual Deploy → Deploy latest commit** (o reinicia el servicio).
+4. `GET /api/status` muestra `"admins"`: si vale `0`, la variable no llegó al proceso. Los logs del
+   arranque también indican los administradores configurados o avisan de que la lista está vacía.
+
 ### Si te desconectas (puedes cerrar Telegram)
 
 La descarga y la subida ocurren **en el servidor**, no en tu conexión: puedes cerrar Telegram o

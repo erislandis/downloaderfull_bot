@@ -62,7 +62,7 @@ class FakeUploader:
 def make_services(admin_ids: set[int] | None = None) -> tuple[Services, Bot, FakeSession]:
     session = FakeSession()
     bot = Bot(token="42:TEST", session=session)
-    settings = make_settings(admin_user_ids=frozenset(admin_ids or {ADMIN_ID}))
+    settings = make_settings(admin_user_ids=frozenset({ADMIN_ID} if admin_ids is None else admin_ids))
     jobs = JobManager(bot, settings, FakeUploader())
     services = Services(
         settings=settings,
@@ -354,6 +354,33 @@ def test_al_iniciar_un_usuario_normal_ve_las_opciones_normales():
         assert "Envíame un enlace" in texts[0]
         assert "Panel de administración" not in texts[0]
         assert "/reiniciar" not in texts[0]
+        assert f"<code>{OTHER_ID}</code>" in texts[0]
+
+    asyncio.run(go())
+
+
+def test_sin_admins_configurados_el_inicio_avisa_como_arreglarlo():
+    async def go():
+        services, bot, session = make_services(admin_ids=set())
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/start", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts
+        assert "No hay administradores configurados" in texts[0]
+        assert "ADMIN_USER_IDS" in texts[0]
+        assert f"<code>{OTHER_ID}</code>" in texts[0]
+
+    asyncio.run(go())
+
+
+def test_el_aviso_de_permisos_muestra_el_id_del_usuario():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/admin", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts
+        assert "ADMIN_USER_IDS" in texts[0]
         assert f"<code>{OTHER_ID}</code>" in texts[0]
 
     asyncio.run(go())

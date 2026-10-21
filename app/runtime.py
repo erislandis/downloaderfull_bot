@@ -150,6 +150,13 @@ class Runtime:
             log.error("Sesión MTProto no disponible: %s", exc)
         else:
             self.bot_username = self.uploader.bot_username
+        admins = sorted(self.admin.ids)
+        if admins:
+            log.info("Administradores configurados: %s", ", ".join(str(a) for a in admins))
+        else:
+            log.warning(
+                "ADMIN_USER_IDS está vacío: nadie podrá usar los comandos de administración."
+            )
         await self.sync_commands()
 
     async def sync_commands(self) -> None:
@@ -182,6 +189,7 @@ class Runtime:
             },
             "sources": [s.label for s in SOURCES],
             "max_file_mb": self.settings.max_file_bytes // (1024 * 1024),
+            "admins": len(self.admin),
             "mtproto": {"ok": not self.mtproto_error, "error": self.mtproto_error},
         }
 

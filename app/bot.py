@@ -111,7 +111,11 @@ class AdminMiddleware(BaseMiddleware):
         if self._admins.is_admin(getattr(user, "id", None)):
             return await handler(event, data)
         if isinstance(event, Message):
-            await event.answer("🔒 Este comando es solo para el administrador del bot.")
+            uid = getattr(user, "id", "?")
+            await event.answer(
+                "🔒 Este comando es solo para el administrador del bot.\n"
+                f"Tu ID de Telegram es <code>{uid}</code>; compáralo con <code>ADMIN_USER_IDS</code>."
+            )
         else:
             await event.answer("🔒 Solo para administradores.", show_alert=True)
         return None
@@ -422,6 +426,11 @@ def build_dispatcher(services: Services) -> Dispatcher:
                 admins=len(services.admin),
                 max_file_bytes=services.settings.max_file_bytes,
                 sources=[s.label for s in SOURCES],
+            )
+        elif len(services.admin) == 0:
+            text += (
+                "\n\n⚠️ No hay administradores configurados. Si eres el dueño, añade tu ID "
+                f"(<code>{uid}</code>) a <code>ADMIN_USER_IDS</code> y reinicia el bot."
             )
         await message.answer(text + f"\n\nTu ID de Telegram es <code>{uid}</code>.")
 

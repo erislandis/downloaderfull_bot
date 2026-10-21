@@ -21,6 +21,7 @@ def test_runtime_status_refleja_version_y_cola():
             assert "MediaFire" in state["sources"] and "Mega" in state["sources"]
             assert state["uptime_seconds"] >= 0
             assert state["version"]
+            assert state["admins"] == 0
         finally:
             await runtime.aclose()
     asyncio.run(go())
