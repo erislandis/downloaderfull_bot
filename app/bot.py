@@ -403,12 +403,27 @@ def build_dispatcher(services: Services) -> Dispatcher:
 
     @router.message(CommandStart())
     @router.message(Command("ayuda", "help", ignore_case=True))
-    async def start(message: Message) -> None:
+    async def start(message: Message, services: Services) -> None:
+        """Saludo inicial: los administradores ven además el panel y sus comandos."""
         uid = message.from_user.id if message.from_user else 0
-        await message.answer(
-            HELP.format(sites=", ".join(s.label for s in SOURCES))
-            + f"\n\nTu ID de Telegram es <code>{uid}</code>."
-        )
+        text = HELP.format(sites=", ".join(s.label for s in SOURCES))
+        if services.admin.is_admin(uid):
+            st = services.status()
+            queue = st.get("queue") or {}
+            mtproto = st.get("mtproto") or {}
+            text += "\n\n" + format_admin_panel(
+                bot=st.get("bot"),
+                uptime_seconds=int(st.get("uptime_seconds") or 0),
+                queue_pending=int(queue.get("pending_jobs") or 0),
+                queue_current=queue.get("current_file"),
+                mtproto_ok=bool(mtproto.get("ok")),
+                mtproto_error=str(mtproto.get("error") or ""),
+                users=len(services.jobs.known_users()),
+                admins=len(services.admin),
+                max_file_bytes=services.settings.max_file_bytes,
+                sources=[s.label for s in SOURCES],
+            )
+        await message.answer(text + f"\n\nTu ID de Telegram es <code>{uid}</code>.")
 
     @router.message(Command("cancelar", ignore_case=True))
     async def cancel(message: Message, services: Services) -> None:

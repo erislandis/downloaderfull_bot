@@ -328,3 +328,32 @@ def test_el_admin_tiene_los_nuevos_comandos():
             assert "🔒" not in texts, f"{command} fue bloqueado"
 
     asyncio.run(go())
+
+
+def test_al_iniciar_el_admin_ve_sus_comandos_y_opciones():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/start", ADMIN_ID))
+        texts = sent_texts(session)
+        assert texts
+        assert "Panel de administración" in texts[0]
+        assert "/reiniciar" in texts[0] and "/pausar" in texts[0]
+        assert f"<code>{ADMIN_ID}</code>" in texts[0]
+
+    asyncio.run(go())
+
+
+def test_al_iniciar_un_usuario_normal_ve_las_opciones_normales():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_update(bot, "/start", OTHER_ID))
+        texts = sent_texts(session)
+        assert texts
+        assert "Envíame un enlace" in texts[0]
+        assert "Panel de administración" not in texts[0]
+        assert "/reiniciar" not in texts[0]
+        assert f"<code>{OTHER_ID}</code>" in texts[0]
+
+    asyncio.run(go())

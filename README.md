@@ -153,6 +153,9 @@ como documento en el propio chat.
 Si envías el enlace de una **carpeta de Mega**, el bot abre el listado de su contenido para que
 elijas: un archivo concreto, un archivo comprimido en ZIP o toda la carpeta en un ZIP.
 
+Al pulsar **Start** (o `/ayuda`), cada usuario ve lo que puede hacer: los administradores
+reciben además el panel de estado y la lista completa de comandos de administración.
+
 /ayuda (o /help) · /estado · /cancelar
 
 ### Comandos de administración
