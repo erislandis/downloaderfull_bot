@@ -14,10 +14,18 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from .admin import (
+    AdminRegistry,
+    format_admin_panel,
+    format_queue,
+    format_users,
+    is_admin_command,
+    parse_user_id,
+)
 from .config import Settings
 from .errors import BridgeError, TransientError
 from .folders import FolderBrowser, FolderView, bundle_for, bundle_for_file, file_view, menu_view, parse_cb
-from .jobs import Job, JobManager
+from .jobs import MAX_JOBS_PER_USER, Job, JobManager
 from .sources import SOURCES, resolve_source
 from .sources.base import (
     BundleFile,
@@ -49,8 +57,7 @@ HELP = (
     "Puedes cerrar Telegram cuando quieras: la descarga y la subida siguen en el\n"
     "servidor y el archivo te espera en este chat al volver.\n\n"
     "/estado – qué transferencias tienes en marcha o entregadas\n"
-    "/cancelar – cancela tus transferencias\n"
-    "/limpiar – borra los archivos almacenados por el bot"
+    "/cancelar – cancela tus transferencias"
 )
 
 
@@ -61,41 +68,139 @@ class Services:
     uploader: TelegramUploader
     jobs: JobManager
     folders: FolderBrowser
+    admin: AdminRegistry
+    status: Callable[[], dict[str, Any]]  # instantánea del runtime (uptime, bot, MTProto)
 
 
-class AuthMiddleware(BaseMiddleware):
-    def __init__(self, allowed: frozenset[int]) -> None:
-        self._allowed = allowed
+class AdminMiddleware(BaseMiddleware):
+    """Deja pasar los mensajes normales y bloquea los comandos de administración.
+
+    Solo se bloquea si el mensaje **es** un comando de administración y quien lo manda no
+    es administrador: el resto de mensajes (enlaces, /estado, texto) siguen su curso.
+    """
+
+    def __init__(self, admins: AdminRegistry) -> None:
+        self._admins = admins
 
     async def __call__(self, handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:
+        if not is_admin_command(getattr(event, "text", None)):
+            return await handler(event, data)
         user = data.get("event_from_user")
-        if user and user.id in self._allowed:
+        if self._admins.is_admin(getattr(user, "id", None)):
             return await handler(event, data)
         if isinstance(event, Message):
-            uid = user.id if user else "desconocido"
-            await event.answer(f"🔒 No tienes acceso a este bot.\nTu ID de Telegram es <code>{uid}</code>.")
-        elif isinstance(event, CallbackQuery):
-            await event.answer("No autorizado", show_alert=True)
+            await event.answer("🔒 Este comando es solo para el administrador del bot.")
         return None
 
 
 def build_dispatcher(services: Services) -> Dispatcher:
-    router = Router()
-    auth = AuthMiddleware(services.settings.allowed_user_ids)
-    router.message.outer_middleware(auth)
-    router.callback_query.outer_middleware(auth)
+    """Monta los routers.
+
+    El bot es **público**: cualquiera puede enviar enlaces y usar el navegador de carpetas.
+    Los comandos de administración viven en un router aparte, protegido por un middleware
+    que exige ser administrador. El router de administración se incluye **primero** para
+    que sus comandos no acaben en el manejador de texto libre.
+    """
+    admin_router = Router(name="admin")
+    admin_router.message.outer_middleware(AdminMiddleware(services.admin))
+
+    @admin_router.message(Command("admin", ignore_case=True))
+    async def admin_panel(message: Message, services: Services) -> None:
+        """Estado general del bot: cola, MTProto, usuarios y límites."""
+        st = services.status()
+        queue = st.get("queue") or {}
+        mtproto = st.get("mtproto") or {}
+        await message.answer(
+            format_admin_panel(
+                bot=st.get("bot"),
+                uptime_seconds=int(st.get("uptime_seconds") or 0),
+                queue_pending=int(queue.get("pending_jobs") or 0),
+                queue_current=queue.get("current_file"),
+                mtproto_ok=bool(mtproto.get("ok")),
+                mtproto_error=str(mtproto.get("error") or ""),
+                users=len(services.jobs.known_users()),
+                admins=len(services.admin),
+                max_file_bytes=services.settings.max_file_bytes,
+                sources=[s.label for s in SOURCES],
+            )
+        )
+
+    @admin_router.message(Command("cola", ignore_case=True))
+    async def admin_queue(message: Message, services: Services) -> None:
+        await message.answer(format_queue(services.jobs.queue_items()))
+
+    @admin_router.message(Command("usuarios", ignore_case=True))
+    async def admin_users(message: Message, services: Services) -> None:
+        await message.answer(format_users(services.jobs.user_stats()))
+
+    @admin_router.message(Command("cancelar_todo", ignore_case=True))
+    async def admin_cancel_all(message: Message, services: Services) -> None:
+        n = services.jobs.cancel_all()
+        await message.answer(f"🛑 Cancelé {n} trabajo(s)." if n else "No hay transferencias en curso.")
+
+    @admin_router.message(Command("limpiar", ignore_case=True))
+    async def admin_clean(message: Message, services: Services) -> None:
+        """Borra todo lo que el bot tiene almacenado en Telegram (afecta a todos)."""
+        try:
+            n = await services.uploader.cleanup(None)
+        except BridgeError as exc:
+            await message.answer(f"❌ {escape(str(exc))}")
+            return
+        await message.answer(f"🧹 Borré {n} archivo(s) almacenados." if n else "No había nada que borrar.")
+
+    @admin_router.message(Command("broadcast", ignore_case=True), F.text)
+    async def admin_broadcast(message: Message, services: Services) -> None:
+        parts = (message.text or "").split(maxsplit=1)
+        body = parts[1].strip() if len(parts) > 1 else ""
+        if not body:
+            await message.answer("Uso: <code>/broadcast mensaje</code>")
+            return
+        sent, failed = await services.jobs.broadcast(body)
+        extra = f" ({failed} fallaron)" if failed else ""
+        await message.answer(f"📣 Aviso enviado a {sent} usuario(s){extra}.")
+
+    @admin_router.message(Command("permitir", ignore_case=True))
+    async def admin_allow(message: Message, services: Services) -> None:
+        user_id = parse_user_id(message.text)
+        if user_id is None:
+            await message.answer("Uso: <code>/permitir id_de_telegram</code>")
+            return
+        if services.admin.grant(user_id):
+            await message.answer(f"✅ <code>{user_id}</code> ya puede usar los comandos de administración.")
+        else:
+            await message.answer(f"ℹ️ <code>{user_id}</code> ya era administrador.")
+
+    @admin_router.message(Command("revocar", ignore_case=True))
+    async def admin_revoke(message: Message, services: Services) -> None:
+        user_id = parse_user_id(message.text)
+        if user_id is None:
+            await message.answer("Uso: <code>/revocar id_de_telegram</code>")
+            return
+        if not services.admin.revoke(user_id):
+            await message.answer(f"ℹ️ <code>{user_id}</code> no era administrador.")
+            return
+        if user_id == message.from_user.id:
+            await message.answer(f"🚫 Te has quitado a ti mismo los permisos de administración.")
+        else:
+            await message.answer(f"🚫 <code>{user_id}</code> ya no puede usar los comandos de administración.")
+
+    router = Router(name="user")
 
     @router.message(CommandStart())
-    @router.message(Command("ayuda"))
+    @router.message(Command("ayuda", ignore_case=True))
     async def start(message: Message) -> None:
-        await message.answer(HELP.format(sites=", ".join(s.label for s in SOURCES)))
+        uid = message.from_user.id if message.from_user else 0
+        await message.answer(
+            HELP.format(sites=", ".join(s.label for s in SOURCES))
+            + f"\n\nTu ID de Telegram es <code>{uid}</code>."
+        )
 
-    @router.message(Command("cancelar"))
+    @router.message(Command("cancelar", ignore_case=True))
     async def cancel(message: Message, services: Services) -> None:
         n = services.jobs.cancel_user(message.from_user.id)
         await message.answer(f"🛑 Cancelé {n} trabajo(s)." if n else "No tienes trabajos activos.")
 
-    @router.message(Command("estado"))
+    @router.message(Command("estado", ignore_case=True))
     async def estado(message: Message, services: Services) -> None:
         """Estado de tus transferencias: útil al volver al chat tras estar desconectado."""
         items = services.jobs.user_status(message.from_user.id)
@@ -124,15 +229,6 @@ def build_dispatcher(services: Services) -> Dispatcher:
         lines.append("\nPuedes cerrar Telegram: la transferencia sigue en el servidor.")
         await message.answer("\n".join(lines))
 
-    @router.message(Command("limpiar"))
-    async def clean(message: Message, services: Services) -> None:
-        try:
-            n = await services.uploader.cleanup(None)
-        except BridgeError as exc:
-            await message.answer(f"❌ {escape(str(exc))}")
-            return
-        await message.answer(f"🧹 Borré {n} archivo(s) almacenados." if n else "No había nada que borrar.")
-
     @router.message(F.text)
     async def on_text(message: Message, services: Services) -> None:
         urls = URL_RE.findall(message.text or "")[:MAX_URLS_PER_MESSAGE]
@@ -147,6 +243,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         await _handle_folder_action(callback, services)
 
     dp = Dispatcher(services=services)
+    dp.include_router(admin_router)
     dp.include_router(router)
     return dp
 
@@ -155,6 +252,25 @@ def _kb(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows]
     )
+
+
+def _submit(
+    services: Services, chat_id: int, user_id: int, source: Source, remote: RemoteFile
+) -> int | None:
+    """Encola un trabajo si el usuario no ha superado el límite de transferencias.
+
+    El bot es público: sin este tope, un usuario podría llenar la cola y agotar la cuota
+    de descarga del resto. Devuelve la posición en la cola o None si no se encoló.
+    """
+    if services.jobs.pending_for(user_id) >= MAX_JOBS_PER_USER:
+        return None
+    return services.jobs.submit(Job(chat_id, user_id, source, [remote]))
+
+
+QUEUE_FULL = (
+    f"⏳ Ya tienes {MAX_JOBS_PER_USER} transferencias en cola. Espera a que terminen "
+    "antes de enviar más enlaces."
+)
 
 
 async def _safe_edit_msg(message: Message, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
@@ -223,7 +339,10 @@ async def _handle_url(message: Message, services: Services, url: str) -> None:
 
     if len(files) == 1:
         remote = files[0]
-        pos = services.jobs.submit(Job(message.chat.id, message.from_user.id, source, [remote]))
+        pos = _submit(services, message.chat.id, message.from_user.id, source, remote)
+        if pos is None:
+            await status.edit_text(QUEUE_FULL)
+            return
         await status.edit_text(
             f"📥 <b>{escape(remote.name)}</b> ({human_size(remote.size)})\n"
             f"En cola (posición {pos}). Puedes cerrar Telegram: te lo dejo aquí al terminar.\n"
@@ -355,7 +474,10 @@ async def _send_file(callback: CallbackQuery, services: Services, view: FolderVi
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return
     remote = node_to_file(node)
-    pos = services.jobs.submit(Job(view.chat_id, view.user_id, source, [remote]))
+    pos = _submit(services, view.chat_id, view.user_id, source, remote)
+    if pos is None:
+        await callback.answer("Ya tienes demasiadas transferencias en cola.", show_alert=True)
+        return
     await callback.answer("En cola ✓")
     await _safe_edit_msg(
         callback.message,
@@ -388,7 +510,10 @@ async def _send_bundle(
     if source is None:
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return
-    pos = services.jobs.submit(Job(view.chat_id, view.user_id, source, [bundle]))
+    pos = _submit(services, view.chat_id, view.user_id, source, bundle)
+    if pos is None:
+        await callback.answer("Ya tienes demasiadas transferencias en cola.", show_alert=True)
+        return
     await callback.answer("Comprimiendo…")
     await _safe_edit_msg(
         callback.message,

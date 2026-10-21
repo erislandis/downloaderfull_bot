@@ -14,7 +14,7 @@ def make_settings(**over) -> Settings:
         telegram_api_id=1,
         telegram_api_hash="hash",
         telegram_session="session",
-        allowed_user_ids=frozenset(),
+        admin_user_ids=frozenset(),
         webhook_base_url=None,
         webhook_secret=None,
         bot_api_max_bytes=50 * 1024 * 1024,

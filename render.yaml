@@ -13,7 +13,7 @@ services:
         generateValue: true
       - key: BOT_TOKEN
         sync: false
-      - key: ALLOWED_USER_IDS
+      - key: ADMIN_USER_IDS
         sync: false
       - key: TELEGRAM_API_ID
         sync: false

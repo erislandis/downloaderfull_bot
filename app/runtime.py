@@ -12,6 +12,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from . import __version__
+from .admin import AdminRegistry
 from .bot import Services, build_dispatcher
 from .config import Settings
 from .folders import FolderBrowser
@@ -47,8 +48,10 @@ class Runtime:
         self.uploader = TelegramUploader(settings, self.bot)
         self.jobs = JobManager(self.bot, settings, self.uploader)
         self.folders = FolderBrowser()
+        # IDs con permisos de administración (pueden cambiarse en caliente con /permitir).
+        self.admin = AdminRegistry(settings.admin_user_ids)
         self.dp: Dispatcher = build_dispatcher(
-            Services(settings, self.http, self.uploader, self.jobs, self.folders)
+            Services(settings, self.http, self.uploader, self.jobs, self.folders, self.admin, self.status)
         )
         self._tasks: list[asyncio.Task[None]] = []
         self.mtproto_error: str = ""

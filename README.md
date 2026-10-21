@@ -99,9 +99,9 @@ un **@username** (el que le da BotFather).
 2. En Render: **New → Blueprint** y elige el repositorio (usa `render.yaml`), o crea un *Web Service*
    con build `pip install -r requirements.txt` y start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
 3. Define las variables: `BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION`,
-   `ALLOWED_USER_IDS`. `WEBHOOK_SECRET` lo genera el blueprint; `RENDER_EXTERNAL_URL` lo pone Render.
-4. Escribe al bot: si no estás autorizado te mostrará tu **ID de Telegram**; añádelo a `ALLOWED_USER_IDS`
-   y redeploya.
+   `ADMIN_USER_IDS`. `WEBHOOK_SECRET` lo genera el blueprint; `RENDER_EXTERNAL_URL` lo pone Render.
+4. El bot lo puede usar cualquiera; escribe al bot para ver tu **ID de Telegram** y añádelo a
+   `ADMIN_USER_IDS` si quieres poder usar los comandos de administración. Después, redeploya.
 
 ### Prueba local (sin webhook)
 1. Crea tu `.env` a partir del ejemplo y rellénalo:
@@ -127,7 +127,24 @@ como documento en el propio chat.
 Si envías el enlace de una **carpeta de Mega**, el bot abre el listado de su contenido para que
 elijas: un archivo concreto, un archivo comprimido en ZIP o toda la carpeta en un ZIP.
 
-`/estado` · `/cancelar` · `/limpiar` (borra del almacén del bot los archivos subidos)
+`/estado` · `/cancelar`
+
+### Comandos de administración
+Solo los responde el bot a los **administradores** (los ID de Telegram de `ADMIN_USER_IDS`).
+Para el resto de usuarios, esos comandos no existen y el bot se comporta con normalidad:
+
+| Comando | Qué hace |
+| --- | --- |
+| `/admin` | Panel: estado del bot, cola, usuarios y cuota. |
+| `/cola` | Lista las transferencias en curso y en espera. |
+| `/usuarios` | Usuarios que han usado el bot y sus transferencias. |
+| `/cancelar_todo` | Cancela todos los trabajos en cola. |
+| `/limpiar` | Borra del almacén del bot los archivos ya subidos. |
+| `/broadcast <texto>` | Envía un mensaje a todos los usuarios que han usado el bot. |
+| `/permitir <id>` | Convierte a un usuario en administrador (solo en memoria: se pierde al reiniciar). |
+| `/revocar <id>` | Quita los permisos de administrador a un usuario. |
+
+Para que un permiso sea permanente hay que añadir el ID a `ADMIN_USER_IDS` y reiniciar el servicio.
 
 ### Si te desconectas (puedes cerrar Telegram)
 
@@ -164,7 +181,9 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
   agotan pronto. El bot informa del tiempo de espera cuando Mega lo indica. Además, las carpetas de Mega
   se montan encriptadas con la clave del enlace: si la clave no es correcta, el bot lo avisa.
 - **GitHub solo aloja el código**, no los archivos (límite de 100 MB por archivo).
-- **Seguridad:** `ALLOWED_USER_IDS` evita que otros gasten tu cuota y tu cuenta; nunca subas el `.env`.
+- **Seguridad:** el bot es público, así que cada usuario puede mandar como mucho 3 transferencias
+  en cola a la vez y los comandos de administración (`ADMIN_USER_IDS`) están restringidos al
+  administrador; nunca subas el `.env`.
 
 ## Tests
 ```bash

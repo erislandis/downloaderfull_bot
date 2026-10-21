@@ -53,7 +53,7 @@ class Settings:
     telegram_api_id: int
     telegram_api_hash: str
     telegram_session: str
-    allowed_user_ids: frozenset[int]
+    admin_user_ids: frozenset[int]
     webhook_base_url: str | None
     webhook_secret: str | None
     bot_api_max_bytes: int
@@ -90,11 +90,17 @@ class Settings:
             raise RuntimeError("BUFFER_MB es demasiado pequeño (mínimo 0.0625).")
 
         try:
-            allowed = frozenset(
-                int(x) for x in env.get("ALLOWED_USER_IDS", "").replace(" ", "").split(",") if x
+            admin = frozenset(
+                int(x)
+                for x in (
+                    env.get("ADMIN_USER_IDS", "") + "," + env.get("ALLOWED_USER_IDS", "")
+                ).replace(" ", "").split(",")
+                if x
             )
         except ValueError:
-            raise RuntimeError("ALLOWED_USER_IDS debe ser una lista de números separados por comas.") from None
+            raise RuntimeError(
+                "ADMIN_USER_IDS debe ser una lista de números separados por comas."
+            ) from None
 
         base = env.get("WEBHOOK_BASE_URL") or env.get("RENDER_EXTERNAL_URL")
         secret = (env.get("WEBHOOK_SECRET") or "").strip()
@@ -103,7 +109,7 @@ class Settings:
             telegram_api_id=api_id,
             telegram_api_hash=env["TELEGRAM_API_HASH"].strip(),
             telegram_session=env["TELEGRAM_SESSION"].strip(),
-            allowed_user_ids=allowed,
+            admin_user_ids=admin,
             webhook_base_url=base.rstrip("/") if base else None,
             webhook_secret=normalize_webhook_secret(secret) if secret else None,
             bot_api_max_bytes=int(float(env.get("BOT_API_MAX_MB", "50")) * 1024 * 1024),

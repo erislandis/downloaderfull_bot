@@ -25,6 +25,7 @@ RETRY_ATTEMPTS = 3  # reintentos por error transitorio (red, 5xx, rate-limit)
 RETRY_BASE_DELAY = 2.0  # espera tras el primer reintento (se duplica cada vez)
 HISTORY_PER_USER = 5  # envíos recientes guardados por usuario
 HISTORY_USERS = 200  # usuarios con historial (tope de memoria)
+MAX_JOBS_PER_USER = 3  # transferencias en cola por usuario (el bot es público)
 
 
 @dataclass
@@ -88,6 +89,7 @@ class JobManager:
         self._current: Job | None = None
         self._task: asyncio.Task[None] | None = None
         self._history: dict[int, list[dict[str, object]]] = {}  # user_id -> últimos envíos
+        self._users: dict[int, dict[str, object]] = {}  # user_id -> resumen de actividad
         self._history_lock = threading.Lock()
 
     @property
@@ -108,6 +110,63 @@ class JobManager:
         self._jobs.append(job)
         self._queue.put_nowait(job)
         return len(self._jobs)  # posición (1 = se ejecuta ya)
+
+    def pending_for(self, user_id: int) -> int:
+        """Transferencias en cola o en curso de un usuario."""
+        return sum(1 for job in self._jobs if job.user_id == user_id)
+
+    def queue_items(self) -> list[dict[str, object]]:
+        """Todos los trabajos en cola o en curso, de cualquier usuario (para /cola)."""
+        return [
+            {
+                "id": job.id,
+                "user_id": job.user_id,
+                "chat_id": job.chat_id,
+                "name": job.label,
+                "size": job.size,
+                "state": job.state,
+            }
+            for job in self._jobs
+        ]
+
+    def cancel_all(self) -> int:
+        """Cancela todos los trabajos, de todos los usuarios. Devuelve cuántos."""
+        count = 0
+        for job in self._jobs:
+            if job.cancelled:
+                continue
+            job.cancelled = True
+            count += 1
+            if job is self._current and self._task:
+                self._task.cancel()
+        return count
+
+    def user_stats(self) -> list[dict[str, object]]:
+        """Resumen de actividad por usuario (para /usuarios)."""
+        with self._history_lock:
+            rows = [dict(row) for row in self._users.values()]
+        rows.sort(key=lambda row: int(row.get("last") or 0), reverse=True)
+        return rows
+
+    def known_users(self) -> list[int]:
+        """IDs de todos los usuarios que han usado el bot alguna vez."""
+        with self._history_lock:
+            return sorted(set(self._users) | set(self._history))
+
+    async def broadcast(self, text: str) -> tuple[int, int]:
+        """Envía un mensaje a todos los usuarios conocidos. Devuelve (enviados, fallidos)."""
+        sent = failed = 0
+        for user_id in self.known_users():
+            try:
+                await self._bot.send_message(user_id, text)
+            except TelegramAPIError:
+                failed += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+                log.warning("No pude enviar el aviso al usuario %d", user_id, exc_info=True)
+            else:
+                sent += 1
+        return sent, failed
 
     def cancel_user(self, user_id: int) -> int:
         count = 0
@@ -163,6 +222,20 @@ class JobManager:
                 for old in list(self._history)[:-HISTORY_USERS]:
                     if old != job.user_id:
                         del self._history[old]
+            # Resumen por usuario para los informes de administración.
+            row = self._users.setdefault(
+                job.user_id, {"id": job.user_id, "jobs": 0, "ok": 0, "failed": 0, "last": 0.0}
+            )
+            row["jobs"] = int(row["jobs"]) + 1
+            if state == "done":
+                row["ok"] = int(row["ok"]) + 1
+            elif state == "failed":
+                row["failed"] = int(row["failed"]) + 1
+            row["last"] = time.time()
+            if len(self._users) > HISTORY_USERS:
+                for old in list(self._users)[:-HISTORY_USERS]:
+                    if old != job.user_id:
+                        del self._users[old]
 
     async def run_forever(self) -> None:
         while True:
