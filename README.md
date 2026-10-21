@@ -34,7 +34,8 @@ al usuario: reenviar no vuelve a subir el archivo, así se esquiva el límite de
 | `app/streams.py` | Puente sync/async: cola acotada que alimenta la subida MTProto sin cargar el archivo en RAM |
 | `app/uploader.py` | Entrega híbrida: Bot API (≤50 MB) o MTProto + reenvío (>50 MB) |
 | `app/jobs.py` | Cola (un archivo a la vez), reintentos ante fallos transitorios y mensajes de progreso |
-| `app/bot.py` | Comandos y handlers de Telegram |
+| `app/admin.py` | Permisos de administración (`ADMIN_USER_IDS`) e informes de estado, cola y usuarios |
+| `app/bot.py` | Comandos y handlers de Telegram (públicos + comandos de administración) |
 | `app/main.py` | Webhook FastAPI para Render (`/webhook`, `/healthz`) más página de estado `/` y API `/api/status` |
 
 ### Carpetas de Mega y ZIP
