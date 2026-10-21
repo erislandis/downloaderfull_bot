@@ -9,6 +9,13 @@ import httpx
 
 
 @dataclass(frozen=True)
+class SourceOptions:
+    """Ajustes opcionales que algunos orígenes necesitan (claves de API, etc.)."""
+
+    google_api_key: str | None = None
+
+
+@dataclass(frozen=True)
 class RemoteFile:
     """Archivo descargable. `ref` es opaco: solo lo interpreta su Source."""
 
@@ -54,8 +61,11 @@ class Source(ABC):
     key: ClassVar[str]
     label: ClassVar[str]
 
-    def __init__(self, http: httpx.AsyncClient, zip_level: int = 1) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, zip_level: int = 1, options: SourceOptions | None = None
+    ) -> None:
         self._http = http
+        self._options = options or SourceOptions()
         # Nivel de deflate para los ZIP (0 = sin comprimir). En el plan gratuito de
         # Render interesa un nivel bajo: menos CPU, misma velocidad de subida.
         self._zip_level = max(0, min(int(zip_level), 9))

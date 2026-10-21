@@ -21,6 +21,8 @@ services:
         sync: false
       - key: TELEGRAM_SESSION
         sync: false
+      - key: GOOGLE_API_KEY  # opcional: activa las carpetas de Google Drive
+        sync: false
       - key: MT_UPLOAD_PARALLEL
         value: "6"
       - key: ZIP_LEVEL

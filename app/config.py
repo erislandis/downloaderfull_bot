@@ -70,6 +70,14 @@ class Settings:
     zip_level: int
     upload_parallelism: int
     render_deploy_hook_url: str | None
+    google_api_key: str | None = None
+
+    @property
+    def source_options(self):
+        """Ajustes que se pasan a los orígenes (import local: evita acoplar config y sources)."""
+        from .sources.base import SourceOptions
+
+        return SourceOptions(google_api_key=self.google_api_key)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -147,4 +155,5 @@ class Settings:
             zip_level=zip_level,
             upload_parallelism=parallelism,
             render_deploy_hook_url=hook,
+            google_api_key=(env.get("GOOGLE_API_KEY") or "").strip() or None,
         )

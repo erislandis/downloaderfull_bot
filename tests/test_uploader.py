@@ -276,3 +276,41 @@ def test_subida_paralela_reparte_los_trozos_y_publica_una_sola_vez(monkeypatch):
         assert up.last_timing.bytes_uploaded == len(data)
 
     asyncio.run(go())
+
+
+def test_bot_api_corta_si_el_origen_envia_mas_de_lo_declarado():
+    """Un servidor que miente en Content-Length no debe poder agotar la RAM del bot."""
+    async def go():
+        bot = FakeBot()
+        up = TelegramUploader(make_settings(bot_api_max_bytes=100), bot)
+        remote = RemoteFile("f.bin", 80, "ref")  # declara 80 bytes…
+        try:
+            await up.upload(FakeSource(os.urandom(5000)), remote, chat_id=1)  # …y manda 5000
+        except UploadError as exc:
+            assert "creció" in str(exc)
+        else:
+            raise AssertionError("debía fallar")
+        assert bot.sent == []
+    asyncio.run(go())
+
+
+def test_fichero_temporal_respeta_el_maximo_y_se_borra():
+    """Sin tamaño declarado no se puede escribir en disco sin límite."""
+    import glob
+    import tempfile
+
+    async def go():
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "bridgebot-*")))
+        up = TelegramUploader(make_settings(max_file_bytes=3000), FakeBot())
+        loop = asyncio.get_running_loop()
+        up._main = up._loop = loop
+        up._client = FakeMTProtoClient()
+        up._me_id = 999
+        try:
+            await up.upload(FakeSource(os.urandom(5000)), RemoteFile("f.bin", None, "ref"), chat_id=1)
+        except UploadError as exc:
+            assert "máximo" in str(exc)
+        else:
+            raise AssertionError("debía fallar")
+        assert set(glob.glob(os.path.join(tempfile.gettempdir(), "bridgebot-*"))) == before
+    asyncio.run(go())

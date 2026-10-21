@@ -59,11 +59,12 @@ INSPECT_RETRIES = 3  # reintentos ante fallos transitorios del sitio (5xx, rate-
 INSPECT_BASE_DELAY = 1.5
 
 HELP = (
-    "👋 Envíame un enlace de <b>{sites}</b> (archivo suelto o carpeta de Mega)\n"
-    "y subiré el archivo a Telegram.\n"
+    "👋 Envíame un enlace de <b>{sites}</b>\n"
+    "(vale cualquier enlace de descarga directa) y subiré el archivo a Telegram.\n"
     "Al terminar lo tendrás aquí mismo como documento.\n\n"
-    "En las carpetas de Mega puedes navegar, elegir un archivo o comprimir\n"
-    "la carpeta (o un archivo) en un único ZIP.\n\n"
+    "Las carpetas de Mega (y las de Google Drive, si el bot tiene clave de API) se abren\n"
+    "con botones: puedes navegar, elegir un archivo o comprimir la carpeta\n"
+    "(o un archivo) en un único ZIP.\n\n"
     "Puedes cerrar Telegram cuando quieras: la descarga y la subida siguen en el\n"
     "servidor y el archivo te espera en este chat al volver.\n\n"
     "/estado – qué transferencias tienes en marcha o entregadas\n"
@@ -456,7 +457,7 @@ def build_dispatcher(services: Services) -> Dispatcher:
         if not items:
             await message.answer(
                 "No tengo transferencias tuyas en cola ni entregadas recientemente.\n"
-                "Envíame un enlace de MediaFire o Mega y lo subo aquí."
+                "Envíame un enlace (MediaFire, Mega, Google Drive o de descarga directa) y lo subo aquí."
             )
             return
         lines = ["<b>📋 Tus transferencias</b>"]
@@ -547,12 +548,14 @@ async def _inspect_with_retry(source: Source, url: str) -> Inspection:
 
 
 async def _handle_url(message: Message, services: Services, url: str) -> None:
-    source = resolve_source(url, services.http, services.settings.zip_level)
+    source = resolve_source(url, services.http, services.settings.zip_level, services.settings.source_options)
     if source is None:
         await message.answer("Ese sitio no está soportado. Acepto: " + ", ".join(s.label for s in SOURCES) + ".")
         return
 
-    status = await message.answer(f"🔎 Analizando enlace de {source.label}…")
+    status = await message.answer(
+        "🔎 Analizando enlace directo…" if source.key == "direct" else f"🔎 Analizando enlace de {source.label}…"
+    )
     try:
         inspection = await _inspect_with_retry(source, url)
     except BridgeError as exc:
@@ -572,7 +575,7 @@ async def _handle_url(message: Message, services: Services, url: str) -> None:
     if inspection.tree is not None:
         tree = inspection.tree
         if not collect_files(tree):
-            await status.edit_text("❌ Esa carpeta de Mega está vacía.")
+            await status.edit_text("❌ Esa carpeta está vacía.")
             return
         view = services.folders.put(message.chat.id, message.from_user.id, url, tree)
         text, rows = menu_view(view)
@@ -723,7 +726,7 @@ async def _send_file(callback: CallbackQuery, services: Services, view: FolderVi
             f"Pesa {human_size(node.size)}; el máximo es {human_size(limit)}.", show_alert=True
         )
         return
-    source = resolve_source(view.url, services.http, services.settings.zip_level)
+    source = resolve_source(view.url, services.http, services.settings.zip_level, services.settings.source_options)
     if source is None:
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return
@@ -760,7 +763,7 @@ async def _send_bundle(
             show_alert=True,
         )
         return
-    source = resolve_source(view.url, services.http, services.settings.zip_level)
+    source = resolve_source(view.url, services.http, services.settings.zip_level, services.settings.source_options)
     if source is None:
         await callback.answer("No pude volver a resolver el enlace.", show_alert=True)
         return

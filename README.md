@@ -1,10 +1,10 @@
 # BridgeBot
 
-Bot de Telegram que recibe un enlace de **MediaFire** o **Mega** y sube el archivo
-**directamente a Telegram**, devolviéndotelo como un documento (un solo archivo, hasta 2 GB).
+Bot de Telegram que recibe un enlace de **MediaFire**, **Mega**, **Google Drive** o cualquier
+**enlace de descarga directa** y sube el archivo **directamente a Telegram**, devolviéndotelo como un documento (un solo archivo, hasta 2 GB).
 
 ```
-Enlace MediaFire/Mega → BridgeBot (Render) → Telegram → tu chat
+Enlace MediaFire/Mega/Drive/directo → BridgeBot (Render) → Telegram → tu chat
 ```
 
 El archivo **casi nunca se guarda en disco**: se descarga y se sube en bloques con memoria constante
@@ -33,6 +33,11 @@ paralelo** (6 por defecto, `MT_UPLOAD_PARALLEL`) y reutiliza el `InputFileBig` r
 
 Además:
 
+- **`cryptg` es imprescindible en el plan gratuito.** Telethon cifra cada trozo con AES-IGE; sin
+  `cryptg` lo hace con libssl/Python, a ~6 MB/s *por núcleo completo* (medido: 84 ms por trozo de
+  512 KB). Con `cryptg` son ~0,9 ms. En 0,1 CPU la diferencia es la que hay entre un tope de
+  ~0,6 MB/s y uno de decenas de MB/s, y el paralelismo de arriba no ayuda si la CPU es el cuello de
+  botella. Está en `requirements.txt`; al arrancar, el log dice `cryptg activo` (o avisa si falta).
 - La descarga se **reanuda** desde el byte exacto si la CDN corta la conexión (Mega permite descifrar
   desde cualquier bloque), sin volver a empezar el archivo.
 - Los ZIP se comprimen con `ZIP_LEVEL=1` por defecto: en 0,1 CPU, bajar de nivel 6 a 1 multiplica la
@@ -43,7 +48,10 @@ Además:
 
 | Ruta | Función |
 |---|---|
-| `app/sources/` | Un módulo por sitio (`mediafire.py`, `mega.py`) con la interfaz `Source` |
+| `app/sources/` | Un módulo por sitio (`mediafire.py`, `mega.py`, `gdrive.py`, `direct.py`) con la interfaz `Source` |
+| `app/sources/direct.py` | Enlaces de descarga directa (cualquier http/https): nombre, tamaño, reanudación |
+| `app/sources/gdrive.py` | Google Drive: archivos, documentos nativos (docx/xlsx/pptx) y carpetas (con `GOOGLE_API_KEY`) |
+| `app/sources/_guard.py` | Cliente HTTP con protección SSRF para los orígenes con URLs arbitrarias |
 | `app/sources/base.py` | Modelo común: `RemoteFile`, `BundleFile`, `FolderNode`, `Inspection` y utilidades del árbol |
 | `app/sources/archive.py` | Generador de ZIP en streaming (deflate + data descriptor), sin cargar el ZIP en memoria |
 | `app/folders.py` | Navegador de carpetas: árbol en memoria con TTL y botones (Telegram limita `callback_data` a 64 B) |
@@ -74,6 +82,31 @@ Un enlace de carpeta de Mega (o un enlace profundo `.../folder/<id>` / `.../file
 
 El ZIP conserva la estructura de carpetas dentro del archivo (la raíz del ZIP es la carpeta elegida).
 Si el servidor no tiene espacio libre suficiente, el bot lo dice antes de empezar.
+
+### Enlaces directos y Google Drive
+
+**Enlace directo:** cualquier URL `http(s)` que empiece a descargar al abrirla. El bot averigua
+nombre y tamaño sin bajar el archivo, rechaza las páginas web con un mensaje claro y reanuda si el
+servidor admite `Range`. Si el servidor no declara el tamaño, el archivo pasa por disco (con tope de
+`MAX_FILE_MB`) antes de subirse.
+
+**Google Drive:** el archivo (o carpeta) debe estar compartido como *«Cualquier persona con el
+enlace»*. Formatos admitidos: `/file/d/<id>`, `open?id=`, `uc?id=`, `drive.usercontent…/download?id=`,
+carpetas `/drive/folders/<id>` y documentos de Google (`docs.google.com/document|spreadsheets|presentation`,
+que se exportan a docx / xlsx / pptx).
+
+| | Sin `GOOGLE_API_KEY` | Con `GOOGLE_API_KEY` |
+|---|---|---|
+| Archivo suelto | Sí (salta el aviso de virus de los archivos grandes) | Sí, por la API v3 (más fiable) |
+| Carpetas (navegar, ZIP) | No | Sí |
+| Documentos de Google | Sí | Sí |
+
+La ruta sin clave lee páginas de Drive que no son una API: Google puede cambiarlas y, desde IPs de
+centros de datos como las de Render, a veces limita archivos muy populares. La clave es gratuita:
+Google Cloud Console → *APIs y servicios* → habilitar **Google Drive API** → *Credenciales* →
+*Crear clave de API* (restríngela a «Google Drive API») → pégala en `GOOGLE_API_KEY` en Render.
+Drive limita las descargas diarias de un mismo archivo público; el bot lo avisa con un mensaje
+específico.
 
 ### Página de estado y API
 
@@ -124,7 +157,7 @@ levantar automáticamente (es igual de efectivo, pero menos elegante).
 3. Define las variables: `BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION`,
    `ADMIN_USER_IDS`. `WEBHOOK_SECRET` lo genera el blueprint; `RENDER_EXTERNAL_URL` lo pone Render.
    Opcionales: `MT_UPLOAD_PARALLEL` (trozos en paralelo, 6 por defecto), `ZIP_LEVEL` (0–9, 1 por
-   defecto), `BUFFER_MB` (16 por defecto) y `RENDER_DEPLOY_HOOK_URL` (para que `/reiniciar` haga un
+   defecto), `GOOGLE_API_KEY` (carpetas de Drive), `BUFFER_MB` (16 por defecto) y `RENDER_DEPLOY_HOOK_URL` (para que `/reiniciar` haga un
    redeploy limpio; se obtiene en *Settings → Deploy Hook* del servicio en Render).
 4. El bot lo puede usar cualquiera; escribe al bot para ver tu **ID de Telegram** y añádelo a
    `ADMIN_USER_IDS` si quieres poder usar los comandos de administración. Después, redeploya.
@@ -210,8 +243,9 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
 
 - **Máximo 2 GB por archivo** (tope de MTProto; con Telegram Premium sería 4 GB). Se corta antes de empezar.
   El límite se aplica a cada archivo y también al tamaño total de un ZIP.
-- **Carpetas:** las de Mega se listan con botones para navegar y elegir archivo, ZIP de archivo o
-  ZIP de la carpeta; MediaFire solo acepta archivos sueltos.
+- **Carpetas:** las de Mega (y las de Google Drive, con `GOOGLE_API_KEY`) se listan con botones para
+  navegar y elegir archivo, ZIP de archivo o ZIP de la carpeta; MediaFire solo acepta archivos sueltos.
+  Una carpeta de Drive admite hasta 2000 elementos y 8 niveles.
 - **Reintentos automáticos:** los fallos transitorios (red, 5xx, límite de peticiones de MediaFire/Mega)
   se reintentan hasta 3 veces con espera creciente antes de dar por perdido el archivo.
 - **Memoria constante:** el contenido se descarga y se sube en streaming (unos pocos MB), pensado para el
@@ -229,6 +263,11 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
   Render no tarde en detectarlo. Si al arrancar no se puede registrar el webhook en Telegram
   (la red del plan gratuito se cae a menudo), el servicio **no se cae**: lo reintenta cada
   minuto durante media hora.
+- **Seguridad (enlaces directos):** el bot descarga URLs que escribe cualquiera, así que bloquea los
+  destinos que no resuelven solo a direcciones públicas (`localhost`, redes privadas, metadatos de la
+  nube `169.254.169.254`, multicast, NAT64…), también en cada redirección, y limita las redirecciones a 5.
+  Límite conocido: la comprobación DNS y la conexión son dos consultas distintas (*DNS rebinding*).
+  Además, un servidor que envíe más datos de los declarados se corta (tope de RAM y de disco).
 - **Seguridad:** el bot es público, así que cada usuario puede mandar como mucho 3 transferencias
   en cola a la vez y los comandos de administración (`ADMIN_USER_IDS`) están restringidos al
   administrador; nunca subas el `.env`.

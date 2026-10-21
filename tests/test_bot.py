@@ -43,6 +43,9 @@ class FakeSession(BaseSession):
         super().__init__()
         self.requests: list[Any] = []
 
+    async def close(self) -> None:  # abstracto en aiogram recientes
+        return None
+
     async def make_request(self, bot: Any, method: Any, timeout: int | None = None) -> Any:
         self.requests.append(method)
         return method

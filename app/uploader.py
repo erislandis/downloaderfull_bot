@@ -38,6 +38,7 @@ from .errors import TransientError, UploadError
 from .mtproto_upload import upload_document
 from .sources.base import BundleFile, RemoteFile, Source
 from .streams import StreamReader
+from .utils import human_size
 
 if TYPE_CHECKING:  # pragma: no cover
     from telethon import TelegramClient
@@ -123,7 +124,16 @@ class TelegramUploader:
         # Render la CPU es muy justa y la importación tarda decenas de segundos. Con el
         # import perezoso el servidor web abre el puerto mucho antes.
         from telethon import TelegramClient
+        from telethon.crypto import aes as telethon_aes
         from telethon.sessions import StringSession
+
+        if getattr(telethon_aes, "cryptg", None) is None:
+            log.warning(
+                "cryptg no está instalado: el cifrado MTProto corre sin aceleración (decenas de veces "
+                "más lento) y limita la subida en el plan gratuito. Añade cryptg a requirements.txt."
+            )
+        else:
+            log.info("cryptg activo: cifrado MTProto acelerado.")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -183,13 +193,16 @@ class TelegramUploader:
     ) -> int:
         started = time.monotonic()
         buf = bytearray()
+        limit = self._s.bot_api_max_bytes
         async for chunk in source.stream(remote):
             buf += chunk
+            # El tamaño declarado puede ser mentira (enlaces directos de terceros): sin este
+            # tope, un servidor que envíe de más agotaría la RAM del plan gratuito (512 MB).
+            if len(buf) > limit:
+                raise UploadError("El archivo creció por encima del máximo de la Bot API; inténtalo de nuevo.")
             if on_progress is not None:
                 await on_progress(len(buf))
         download_done = time.monotonic() - started
-        if len(buf) > self._s.bot_api_max_bytes:
-            raise UploadError("El archivo creció por encima del máximo de la Bot API; inténtalo de nuevo.")
         try:
             await self._bot.send_document(
                 chat_id,
@@ -277,11 +290,16 @@ class TelegramUploader:
         fd, path = tempfile.mkstemp(prefix="bridgebot-", suffix=".zip" if isinstance(remote, BundleFile) else ".bin")
         written = 0
         batch = bytearray()
+        cap = self._s.max_file_bytes
         try:
             with os.fdopen(fd, "wb") as fh:
                 async for chunk in source.stream(remote):
                     batch += chunk
                     written += len(chunk)
+                    # Orígenes sin tamaño declarado (enlaces directos): sin tope, un flujo
+                    # infinito llenaría el disco del servidor.
+                    if written > cap:
+                        raise UploadError(f"El archivo supera el máximo permitido ({human_size(cap)}).")
                     if len(batch) >= WRITE_BATCH:
                         await asyncio.to_thread(fh.write, bytes(batch))
                         batch.clear()

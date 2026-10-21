@@ -57,7 +57,7 @@ STATUS_PAGE = """<!DOCTYPE html>
 <body>
 <main>
   <h1>BridgeBot</h1>
-  <p class="sub">Puente de descargas MediaFire/Mega → Telegram</p>
+  <p class="sub">Puente de descargas MediaFire/Mega/Google Drive/enlaces directos → Telegram</p>
   <p>__MTPROTO__</p>
   <dl>
     <dt>Bot</dt><dd>__BOT__</dd>
@@ -67,7 +67,7 @@ STATUS_PAGE = """<!DOCTYPE html>
     <dt>Sitios soportados</dt><dd>__SOURCES__</dd>
     <dt>Tamaño máximo</dt><dd>__MAXSIZE__ MB</dd>
   </dl>
-  <p>Envíame un enlace de <b>MediaFire</b> o <b>Mega</b> en Telegram y te devolveré el
+  <p>Envíame un enlace de <b>MediaFire</b>, <b>Mega</b>, <b>Google Drive</b> o de descarga directa en Telegram y te devolveré el
   archivo aquí mismo como documento.</p>
   <p>API de estado: <code>GET /api/status</code></p>
 </main>
