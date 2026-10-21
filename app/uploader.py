@@ -5,8 +5,14 @@ Estrategia híbrida:
   (se descargan en RAM, nunca en disco).
 * Archivos grandes (hasta 2 GB): los sube una cuenta de usuario por MTProto. Como la
   cuenta no puede escribir a quien nunca la contactó, sube el documento al chat privado
-  del bot y el bot lo **reenvía** al usuario (reenviar no vuelve a subir el archivo, así
-  esquiva el límite de 50 MB de la Bot API).
+  del bot y el bot lo **copia** al chat del usuario (copiar no vuelve a subir el archivo,
+  así esquiva el límite de 50 MB de la Bot API).
+
+El paso final es delicado: la Bot API numera los mensajes de cada chat desde 1, mientras
+que MTProto usa el contador global del peer, así que el ``id`` que devuelve telethon
+**no** sirve para copiar el mensaje. La cuenta publica el documento con un pie de foto
+que lleva un token y, cuando el bot recibe ese documento por webhook, ese update trae el
+``message_id`` de la Bot API (ver ``app/bot.py``); con él ya se puede copiar el archivo.
 
 La subida por MTProto corre en su propio hilo con su propio loop; el ``stream()`` del
 origen sigue en el loop principal y alimenta un ``StreamReader`` acotado en memoria.
@@ -26,6 +32,7 @@ import shutil
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Awaitable, Callable
 
@@ -50,6 +57,8 @@ PROGRESS_MIN_INTERVAL = 0.5
 PART_SIZE_KB = 512  # máximo que acepta Telegram (mitad de peticiones que 256 KB)
 DOWNLOAD_ATTEMPTS = 3  # reintentos de la descarga antes de tirar el trabajo
 WRITE_BATCH = 1024 * 1024  # bytes que se acumulan antes de escribir en disco
+BRIDGE_PREFIX = "bridge:"  # prefijo del pie de foto con el token de la subida
+BRIDGE_TIMEOUT = 90.0  # segundos que se espera el update con el message_id de la Bot API
 
 
 @dataclass
@@ -58,7 +67,7 @@ class Timing:
 
     download: float = 0.0
     upload: float = 0.0
-    forward: float = 0.0
+    deliver: float = 0.0
     bytes_downloaded: int = 0
     bytes_uploaded: int = 0
 
@@ -66,6 +75,16 @@ class Timing:
 def _read_file(path: str) -> bytes:
     with open(path, "rb") as fh:
         return fh.read()
+
+
+def _bridge_caption(token: str | None) -> str | None:
+    """Pie de foto con el token de la subida (el bot lo recibe luego por webhook)."""
+    return f"{BRIDGE_PREFIX}{token}" if token else None
+
+
+def _set_bridge_result(future: "asyncio.Future[int]", message_id: int) -> None:
+    if not future.done():
+        future.set_result(message_id)
 
 
 class TelegramUploader:
@@ -85,6 +104,8 @@ class TelegramUploader:
         self._start_error: BaseException | None = None
         self._storage: list[tuple[int, float]] = []
         self._storage_lock = threading.Lock()
+        # Subidas en curso esperando el ``message_id`` de la Bot API (ver ``open_bridge``).
+        self._bridges: dict[str, "asyncio.Future[int]"] = {}
         # Hilo exclusivo para volcar los bloques en el lector de la subida: así el
         # productor nunca compite con la compresión de los ZIP ni con el hash.
         self._feed_executor = concurrent.futures.ThreadPoolExecutor(
@@ -175,6 +196,39 @@ class TelegramUploader:
 
     async def _submit_and_wait(self, coro):
         return await asyncio.wrap_future(self._submit(coro))
+
+    # -- puente MTProto → Bot API ----------------------------------------------------------
+
+    def open_bridge(self, token: str) -> "asyncio.Future[int]":
+        """Registra una subida en curso y devuelve el futuro con su ``message_id``.
+
+        La Bot API numera los mensajes de cada chat desde 1 y MTProto usa el contador
+        global del peer: los dos ``id`` del mismo mensaje no coinciden (el de la Bot API
+        es mucho más pequeño). El único sitio donde aparece el id de la Bot API es el
+        update que Telegram entrega cuando el bot recibe el documento, así que la subida
+        se queda esperando ese dato mientras el token viaja en el pie de foto.
+        """
+        future = asyncio.get_running_loop().create_future()
+        self._bridges[token] = future
+        return future
+
+    def close_bridge(self, token: str) -> None:
+        self._bridges.pop(token, None)
+
+    def resolve_bridge(self, token: str, message_id: int) -> bool:
+        """El bot ha recibido el documento subido: ya se conoce su id de la Bot API."""
+        future = self._bridges.get(token)
+        if future is None or future.done():
+            return False
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover
+            running = None
+        if running is future.get_loop():
+            future.set_result(message_id)
+        else:  # pragma: no cover - el update puede llegar desde otro hilo
+            future.get_loop().call_soon_threadsafe(_set_bridge_result, future, message_id)
+        return True
 
     # -- subida -------------------------------------------------------------------------
 
@@ -339,6 +393,8 @@ class TelegramUploader:
         timing = Timing()
         started = time.monotonic()
         download_done = 0.0
+        token = uuid.uuid4().hex
+        bridge = self.open_bridge(token)
 
         async def _produce() -> None:
             """Descarga el archivo y lo va metiendo en el lector de la subida.
@@ -378,11 +434,13 @@ class TelegramUploader:
 
         producer = self._main.create_task(_produce())
         try:
-            message = await asyncio.wrap_future(self._submit(self._run_upload(reader, remote)))
+            message = await asyncio.wrap_future(self._submit(self._run_upload(reader, remote, token)))
         except asyncio.CancelledError:
             self.cancel_current()
+            self.close_bridge(token)
             raise
         except Exception as exc:  # noqa: BLE001
+            self.close_bridge(token)
             if reader.error is not None:
                 raise reader.error
             raise UploadError(f"No pude subir el archivo a Telegram: {exc}") from exc
@@ -397,13 +455,23 @@ class TelegramUploader:
             self._progress = None
 
         if message is None:
+            self.close_bridge(token)
             raise UploadError("Telegram no confirmó el documento.")
         timing.bytes_downloaded = produced
         timing.bytes_uploaded = remote.size or produced
         timing.download = download_done
         timing.upload = time.monotonic() - started
-        await self._forward(message, chat_id)
-        timing.forward = time.monotonic() - started - timing.upload
+        try:
+            bot_message_id = await asyncio.wait_for(bridge, BRIDGE_TIMEOUT)
+        except (asyncio.TimeoutError, TimeoutError):
+            raise UploadError(
+                "Subí el archivo pero el bot no llegó a recibirlo (no respondió el webhook). "
+                "Inténtalo de nuevo."
+            ) from None
+        finally:
+            self.close_bridge(token)
+        await self._deliver(bot_message_id, message.id, chat_id)
+        timing.deliver = time.monotonic() - started - timing.upload
         self.last_timing = timing
         return produced or (remote.size or 0)
 
@@ -422,59 +490,82 @@ class TelegramUploader:
         self._progress = on_progress
         timing = Timing()
         started = time.monotonic()
+        token = uuid.uuid4().hex
+        bridge = self.open_bridge(token)
         try:
-            message = await asyncio.wrap_future(self._submit(self._run_upload_path(path, remote, size)))
+            message = await asyncio.wrap_future(
+                self._submit(self._run_upload_path(path, remote, size, token))
+            )
         except asyncio.CancelledError:
             self.cancel_current()
+            self.close_bridge(token)
             raise
         except Exception as exc:  # noqa: BLE001
+            self.close_bridge(token)
             raise UploadError(f"No pude subir el ZIP a Telegram: {exc}") from exc
         finally:
             self._progress = None
 
         if message is None:
+            self.close_bridge(token)
             raise UploadError("Telegram no confirmó el documento.")
         timing.upload = time.monotonic() - started
         timing.bytes_downloaded = size
         timing.bytes_uploaded = size
-        await self._forward(message, chat_id)
-        timing.forward = time.monotonic() - started - timing.upload
+        try:
+            bot_message_id = await asyncio.wait_for(bridge, BRIDGE_TIMEOUT)
+        except (asyncio.TimeoutError, TimeoutError):
+            raise UploadError(
+                "Subí el ZIP pero el bot no llegó a recibirlo (no respondió el webhook). "
+                "Inténtalo de nuevo."
+            ) from None
+        finally:
+            self.close_bridge(token)
+        await self._deliver(bot_message_id, message.id, chat_id)
+        timing.deliver = time.monotonic() - started - timing.upload
         self.last_timing = timing
         return size
 
-    async def _forward(self, message, chat_id: int) -> None:
-        """Reenvía al usuario el documento ya subido al chat privado del bot.
+    async def _deliver(self, bot_message_id: int, mtproto_message_id: int, chat_id: int) -> None:
+        """Copia en el chat del usuario el documento que la cuenta MTProto publicó en el bot.
 
-        Reenviar no vuelve a subir el archivo, así que se puede reintentar sin coste:
-        si el usuario está desconectado no pasa nada (Telegram le entrega el mensaje
-        cuando vuelva).
+        ``bot_message_id`` es el identificador según la **Bot API** (obligatorio para
+        ``copyMessage``) y ``mtproto_message_id`` el de telethon (es el que hay que usar
+        para borrar el archivo del almacén). Copiar no vuelve a subir el archivo, así que
+        se puede reintentar sin coste: si el usuario está desconectado no pasa nada
+        (Telegram le entrega el mensaje cuando vuelva).
         """
         last: Exception | None = None
         for attempt in range(3):
             try:
-                await self._bot.forward_message(
-                    chat_id=chat_id, from_chat_id=self._me_id, message_id=message.id
+                await self._bot.copy_message(
+                    chat_id=chat_id,
+                    from_chat_id=self._me_id,
+                    message_id=bot_message_id,
+                    caption="",  # el pie de foto lleva el token interno: no se muestra
                 )
             except TelegramNetworkError as exc:
                 last = exc
                 await asyncio.sleep(1.5 * (attempt + 1))
                 continue
             except Exception as exc:  # noqa: BLE001
-                raise UploadError(f"Subí el archivo pero no pude reenviarlo: {exc}") from exc
+                raise UploadError(f"Subí el archivo pero no pude copiarlo a tu chat: {exc}") from exc
             else:
                 with self._storage_lock:
-                    self._storage.append((message.id, time.monotonic()))
+                    self._storage.append((mtproto_message_id, time.monotonic()))
                 return
-        raise UploadError(f"Subí el archivo pero no pude reenviarlo: {last}")
+        raise UploadError(f"Subí el archivo pero no pude copiarlo a tu chat: {last}")
 
-    async def _run_upload(self, reader: StreamReader, remote: RemoteFile):
+    async def _run_upload(self, reader: StreamReader, remote: RemoteFile, token: str | None = None):
         """Sube el contenido del lector (ya alimentado por el productor)."""
         size = remote.size or 0
         if self._s.upload_parallelism > 1 and size > 0:
-            return await self._run_upload_parallel(reader, remote, size)
-        return await self._run_upload_sequential(reader, remote)
+            return await self._run_upload_parallel(reader, remote, size, token)
+        return await self._run_upload_sequential(reader, remote, token)
 
-    async def _run_upload_parallel(self, reader: StreamReader, remote: RemoteFile, size: int):
+    async def _run_upload_parallel(
+        self, reader: StreamReader, remote: RemoteFile, size: int, token: str | None = None
+    ):
         """Varias piezas en vuelo: es lo que quita la latencia de la subida."""
         handle = await upload_document(
             self._client,  # type: ignore[arg-type]
@@ -492,6 +583,7 @@ class TelegramUploader:
                 file=handle,
                 force_document=True,
                 file_name=remote.name,
+                caption=_bridge_caption(token),
             )
         )
         try:
@@ -499,7 +591,9 @@ class TelegramUploader:
         finally:
             self._current_task = None
 
-    async def _run_upload_sequential(self, reader: StreamReader, remote: RemoteFile):
+    async def _run_upload_sequential(
+        self, reader: StreamReader, remote: RemoteFile, token: str | None = None
+    ):
         """Subida pieza a pieza (la que hace Telethon por defecto)."""
         self._current_task = asyncio.ensure_future(
             self._client.send_file(  # type: ignore[union-attr]
@@ -510,6 +604,7 @@ class TelegramUploader:
                 file_size=remote.size,
                 part_size_kb=PART_SIZE_KB,
                 progress_callback=self._on_progress_thread,
+                caption=_bridge_caption(token),
             )
         )
         try:
@@ -517,7 +612,7 @@ class TelegramUploader:
         finally:
             self._current_task = None
 
-    async def _run_upload_path(self, path: str, remote: RemoteFile, size: int):
+    async def _run_upload_path(self, path: str, remote: RemoteFile, size: int, token: str | None = None):
         """Sube un fichero de disco: con piezas en paralelo si el tamaño lo permite."""
         if self._s.upload_parallelism > 1 and size > 0:
             with open(path, "rb") as fh:
@@ -536,6 +631,7 @@ class TelegramUploader:
                     file=handle,
                     force_document=True,
                     file_name=remote.name,
+                    caption=_bridge_caption(token),
                 )
             )
             try:
@@ -552,6 +648,7 @@ class TelegramUploader:
                 file_size=size,
                 part_size_kb=PART_SIZE_KB,
                 progress_callback=self._on_progress_thread,
+                caption=_bridge_caption(token),
             )
         )
         try:

@@ -48,7 +48,7 @@ from .sources.base import (
     parent_of,
     tree_from_files,
 )
-from .uploader import TelegramUploader
+from .uploader import BRIDGE_PREFIX, TelegramUploader
 from .utils import human_duration, human_size
 
 log = logging.getLogger(__name__)
@@ -478,6 +478,19 @@ def build_dispatcher(services: Services) -> Dispatcher:
             lines.append(f"· {name}{weight}: {mark}{extra}")
         lines.append("\nPuedes cerrar Telegram: la transferencia sigue en el servidor.")
         await message.answer("\n".join(lines))
+
+    @router.message(F.caption.startswith(BRIDGE_PREFIX))
+    async def on_bridge_upload(message: Message, services: Services) -> None:
+        """La cuenta MTProto acaba de publicar un archivo en el chat privado del bot.
+
+        El token va en el pie de foto del documento: este update es la única fuente del
+        ``message_id`` de la Bot API (la Bot API numera los mensajes de cada chat desde 1
+        y MTProto usa el contador global del peer, así que los ids no coinciden). Con él
+        la subida puede copiar el archivo al chat del usuario sin volver a subirlo.
+        """
+        token = (message.caption or "")[len(BRIDGE_PREFIX) :].strip()
+        if token and services.uploader.resolve_bridge(token, message.message_id):
+            log.info("Documento subido por MTProto recibido (message_id %s)", message.message_id)
 
     @router.message(F.text.startswith("/"), F.chat.type == "private")
     async def unknown_command(message: Message) -> None:

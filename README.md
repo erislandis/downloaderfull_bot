@@ -17,11 +17,25 @@ de un fichero real. El código vive en GitHub; Render solo lo ejecuta.
 | Tamaño del archivo | Ruta | Límite |
 |---|---|---|
 | ≤ 50 MB | La sube el propio bot por la Bot API | 50 MB (tope de Telegram) |
-| > 50 MB | La sube una **cuenta de usuario** por MTProto y el bot la reenvía | 2 GB |
+| > 50 MB | La sube una **cuenta de usuario** por MTProto y el bot la **copia** al chat del usuario | 2 GB |
 
 La Bot API de Telegram solo admite 50 MB por documento. Para archivos grandes se usa una cuenta
-de usuario (Teléfono/Telegram) que sube el documento al chat privado del bot y este lo **reenvía**
-al usuario: reenviar no vuelve a subir el archivo, así se esquiva el límite de 50 MB.
+de usuario (Teléfono/Telegram) que sube el documento al chat privado del bot y este lo **copia**
+al usuario: copiar no vuelve a subir el archivo, así se esquiva el límite de 50 MB.
+
+### El puente de identificadores (por qué copiar y no reenviar)
+
+La Bot API numera los mensajes **de cada chat** desde 1; MTProto usa el contador global del peer.
+Los dos identificadores del mismo mensaje **no coinciden** (el de la Bot API es mucho más pequeño),
+así que reenviar con el id que devuelve Telethon falla con
+`Bad Request: message to forward not found`.
+
+Para obtener el id que sí entiende la Bot API, la subida se publica en el chat del bot con un
+**token en el pie de foto** (`bridge:<uuid>`). Telegram entrega ese documento al bot como un update
+normal: su `message_id` **es** el de la Bot API, y es el único sitio donde aparece. El bot resuelve
+el token (`app/bot.py`) y la subida espera ese dato (`app/uploader.py`) para hacer el `copyMessage`
+con el pie de foto limpio. Si el bot no recibe el documento, la subida avisa en vez de fallar en
+silencio.
 
 ### Por qué la subida es rápida (plan gratuito)
 
@@ -57,7 +71,7 @@ Además:
 | `app/folders.py` | Navegador de carpetas: árbol en memoria con TTL y botones (Telegram limita `callback_data` a 64 B) |
 | `app/streams.py` | Puente sync/async: cola acotada que alimenta la subida MTProto sin cargar el archivo en RAM |
 | `app/mtproto_upload.py` | Subida MTProto con varios trozos (512 KB) en vuelo a la vez |
-| `app/uploader.py` | Entrega híbrida: Bot API (≤50 MB) o MTProto + reenvío (>50 MB), con reanudación de la descarga |
+| `app/uploader.py` | Entrega híbrida: Bot API (≤50 MB) o MTProto + copia (>50 MB), con reanudación de la descarga y puente de identificadores |
 | `app/jobs.py` | Cola (un archivo a la vez), pausa, reintentos, estadísticas y mensajes de progreso |
 | `app/admin.py` | Permisos de administración, bloqueos (`BanRegistry`) e informes |
 | `app/runtime.py` | Ensamblado de dependencias, menú de comandos, registro en memoria y reinicio |
@@ -76,9 +90,9 @@ Un enlace de carpeta de Mega (o un enlace profundo `.../folder/<id>` / `.../file
 | Contenido | Cómo se sube |
 |---|---|
 | Archivo suelto ≤ 50 MB | Bot API (en RAM) |
-| Archivo suelto > 50 MB | MTProto + reenvío (en RAM, en bloques) |
+| Archivo suelto > 50 MB | MTProto + copia (en RAM, en bloques) |
 | ZIP ≤ 50 MB | Bot API (en RAM) |
-| ZIP > 50 MB | Se comprime en un fichero temporal y se sube por MTProto + reenvío |
+| ZIP > 50 MB | Se comprime en un fichero temporal y se sube por MTProto + copia |
 
 El ZIP conserva la estructura de carpetas dentro del archivo (la raíz del ZIP es la carpeta elegida).
 Si el servidor no tiene espacio libre suficiente, el bot lo dice antes de empezar.
@@ -89,6 +103,12 @@ Si el servidor no tiene espacio libre suficiente, el bot lo dice antes de empeza
 nombre y tamaño sin bajar el archivo, rechaza las páginas web con un mensaje claro y reanuda si el
 servidor admite `Range`. Si el servidor no declara el tamaño, el archivo pasa por disco (con tope de
 `MAX_FILE_MB`) antes de subirse.
+
+Si lo que responde el servidor es una página web, el bot lo detecta por el tipo de contenido **y**
+por el principio del cuerpo (hay servidores que envían la web como si fuera un binario), dice cuál
+es el título de esa página y, si parece un bloqueo (403, *captcha*, *access denied*…), avisa de que
+el servidor está rechazando las descargas desde la nube. Cuando la respuesta con `Range` es una web
+pero sin `Range` llega el archivo, se reintenta sin esa cabecera.
 
 **Google Drive:** el archivo (o carpeta) debe estar compartido como *«Cualquier persona con el
 enlace»*. Formatos admitidos: `/file/d/<id>`, `open?id=`, `uc?id=`, `drive.usercontent…/download?id=`,

@@ -63,6 +63,36 @@ def is_html(response: httpx.Response) -> bool:
     return "attachment" not in response.headers.get("content-disposition", "").lower()
 
 
+_TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+_HTML_MARKS = (b"<!doctype html", b"<html", b"<?xml", b"<head", b"<body")
+
+
+async def peek(response: httpx.Response, limit: int = 2048) -> bytes:
+    """Los primeros bytes de la respuesta, sin leerla entera (el archivo puede pesar GB)."""
+    buf = bytearray()
+    async for chunk in response.aiter_bytes(limit):
+        buf += chunk
+        if len(buf) >= limit:
+            break
+    return bytes(buf)
+
+
+def body_is_html(body: bytes) -> bool:
+    """¿El cuerpo empieza como una página web? (hay servidores que no lo anuncian)"""
+    head = body.lstrip()[:256].lower()
+    return head.startswith(_HTML_MARKS)
+
+
+def page_title(body: bytes) -> str:
+    """Título de la página: sirve para explicarle al usuario qué está viendo el bot."""
+    match = _TITLE_RE.search(body)
+    if not match:
+        return ""
+    text = match.group(1).decode("utf-8", "replace")
+    return re.sub(r"\s+", " ", text).strip()[:120]
+
+
 def response_size(response: httpx.Response) -> int | None:
     """Tamaño total del archivo según las cabeceras (``None`` si no se puede saber)."""
     if response.status_code == 206:

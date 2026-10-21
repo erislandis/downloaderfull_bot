@@ -18,6 +18,7 @@ from app.bot import Services, build_dispatcher
 from app.folders import FolderBrowser
 from app.jobs import JobManager
 from app.sources.base import RemoteFile
+from app.uploader import BRIDGE_PREFIX
 from tests.test_uploader import make_settings
 
 ADMIN_ID = 4242
@@ -55,11 +56,18 @@ class FakeSession(BaseSession):
 
 
 class FakeUploader:
+    def __init__(self) -> None:
+        self.resolved: list[tuple[str, int]] = []
+
     async def upload(self, source, remote, chat_id, on_progress=None) -> int:
         return remote.size or 0
 
     async def cleanup(self, max_age: float | None) -> int:
         return 0
+
+    def resolve_bridge(self, token: str, message_id: int) -> bool:
+        self.resolved.append((token, message_id))
+        return True
 
 
 def make_services(admin_ids: set[int] | None = None) -> tuple[Services, Bot, FakeSession]:
@@ -114,6 +122,24 @@ def make_update(bot: Bot, text: str, user_id: int) -> Update:
     )
 
 
+def make_bridge_update(bot: Bot, caption: str, message_id: int = 42) -> Update:
+    """Update con un documento (sin texto) cuyo pie de foto lleva el token del puente."""
+    return Update.model_validate(
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": message_id,
+                "date": 1700000000,
+                "chat": {"id": 999, "type": "private"},
+                "from_user": {"id": 999, "is_bot": False, "first_name": "MT"},
+                "caption": caption,
+                "document": {"file_id": "F1", "file_unique_id": "U1"},
+            },
+        },
+        context={"bot": bot},
+    )
+
+
 def sent_texts(session: FakeSession) -> list[str]:
     return [getattr(r, "text", "") for r in session.requests]
 
@@ -138,6 +164,30 @@ def make_callback(bot: Bot, data: str, user_id: int) -> Update:
         },
         context={"bot": bot},
     )
+
+
+def test_el_documento_del_puente_resuelve_el_token():
+    """El documento que sube la cuenta MTProto llega con su id de la Bot API."""
+
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_bridge_update(bot, f"{BRIDGE_PREFIX}abc-123"))
+        assert services.uploader.resolved == [("abc-123", 42)]
+        # No es una orden del usuario: el bot no debe contestar nada.
+        assert sent_texts(session) == []
+
+    asyncio.run(go())
+
+
+def test_un_documento_normal_no_rompe_nada():
+    async def go():
+        services, bot, session = make_services()
+        dp = build_dispatcher(services)
+        await dp.feed_update(bot, make_bridge_update(bot, "un pie de foto normal"))
+        assert services.uploader.resolved == []
+
+    asyncio.run(go())
 
 
 def test_el_admin_puede_usar_los_comandos_de_administracion():

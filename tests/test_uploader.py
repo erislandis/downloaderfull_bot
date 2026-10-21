@@ -5,7 +5,7 @@ from dataclasses import replace
 from app.config import Settings
 from app.errors import UploadError
 from app.sources.base import BundleFile, RemoteFile
-from app.uploader import TelegramUploader
+from app.uploader import BRIDGE_PREFIX, TelegramUploader, _bridge_caption
 
 
 def make_settings(**over) -> Settings:
@@ -31,13 +31,13 @@ def make_settings(**over) -> Settings:
 class FakeBot:
     def __init__(self) -> None:
         self.sent: list[tuple] = []
-        self.forwarded: list[tuple] = []
+        self.copied: list[tuple] = []
 
     async def send_document(self, chat_id, document, **kwargs):
         self.sent.append((chat_id, document, kwargs))
 
-    async def forward_message(self, chat_id, from_chat_id, message_id):
-        self.forwarded.append((chat_id, from_chat_id, message_id))
+    async def copy_message(self, chat_id, from_chat_id, message_id, **kwargs):
+        self.copied.append((chat_id, from_chat_id, message_id, kwargs))
 
 
 class FakeMTProtoClient:
@@ -72,11 +72,13 @@ def test_archivo_pequeno_usa_la_bot_api():
         assert chat_id == 7
         assert document.filename == "f.bin"
         assert document.data == data
-        assert up._bot.forwarded == []
+        assert up._bot.copied == []
     asyncio.run(go())
 
 
-def test_archivo_grande_usa_mtproto_y_reenvia():
+def test_archivo_grande_usa_mtproto_y_copia_al_usuario():
+    """El archivo se sube con la cuenta de usuario y el bot lo copia al chat del usuario."""
+
     async def go():
         bot = FakeBot()
         up = TelegramUploader(make_settings(bot_api_max_bytes=100, buffer_size=256), bot)
@@ -86,8 +88,11 @@ def test_archivo_grande_usa_mtproto_y_reenvia():
         up._me_id = 999
         captured: dict[str, bytes] = {}
 
-        async def fake_run_upload(reader, remote):
+        async def fake_run_upload(reader, remote, token=None):
             captured["data"] = await asyncio.to_thread(reader.readall)
+            captured["caption"] = token
+            # El webhook entrega el message_id de la Bot API del documento recibido.
+            up.resolve_bridge(token, 77)
             return FakeMessage(55)
 
         up._run_upload = fake_run_upload
@@ -95,9 +100,64 @@ def test_archivo_grande_usa_mtproto_y_reenvia():
         total = await up.upload(FakeSource(data), RemoteFile("big.bin", len(data), "ref"), chat_id=7)
         assert captured["data"] == data
         assert total == len(data)
-        assert bot.forwarded == [(7, 999, 55)]
+        # Se copia con el id de la Bot API (77), no con el de MTProto (55).
+        (chat_id, from_chat_id, message_id, _), = bot.copied
+        assert (chat_id, from_chat_id, message_id) == (7, 999, 77)
+        assert captured["caption"], "el token del puente debe viajar hasta el pie de foto"
+        assert _bridge_caption(captured["caption"]).startswith(BRIDGE_PREFIX)
         assert await up.cleanup(None) == 1
-        assert up._client.deleted == [55]
+        assert up._client.deleted == [55]  # el borrado usa el id de MTProto
+    asyncio.run(go())
+
+
+def test_si_la_subida_falla_no_queda_el_puente_abierto():
+    """El token del puente se libera siempre: si no, se acumulan submits muertos."""
+
+    async def go():
+        up = TelegramUploader(make_settings(bot_api_max_bytes=100, buffer_size=256), FakeBot())
+        loop = asyncio.get_running_loop()
+        up._main = up._loop = loop
+        up._client = FakeMTProtoClient()
+        up._me_id = 999
+
+        async def fake_run_upload(reader, remote, token=None):
+            raise RuntimeError("se rompió la subida")
+
+        up._run_upload = fake_run_upload
+        try:
+            await up.upload(FakeSource(os.urandom(5000)), RemoteFile("big.bin", 5000, "ref"), chat_id=7)
+        except UploadError:
+            pass
+        else:
+            raise AssertionError("debía fallar")
+        assert up._bridges == {}
+    asyncio.run(go())
+
+
+def test_sin_el_update_del_webhook_se_avisa_del_problema(monkeypatch):
+    """Si el bot no recibe el documento, no se puede saber su id de la Bot API."""
+
+    async def go():
+        monkeypatch.setattr("app.uploader.BRIDGE_TIMEOUT", 0.05)
+        bot = FakeBot()
+        up = TelegramUploader(make_settings(bot_api_max_bytes=100, buffer_size=256), bot)
+        loop = asyncio.get_running_loop()
+        up._main = up._loop = loop
+        up._client = FakeMTProtoClient()
+        up._me_id = 999
+
+        async def fake_run_upload(reader, remote, token=None):
+            await asyncio.to_thread(reader.readall)
+            return FakeMessage(55)  # el webhook nunca contesta
+
+        up._run_upload = fake_run_upload
+        try:
+            await up.upload(FakeSource(os.urandom(5000)), RemoteFile("big.bin", 5000, "ref"), chat_id=7)
+        except UploadError as exc:
+            assert "webhook" in str(exc)
+        else:
+            raise AssertionError("debía fallar")
+        assert bot.copied == []
     asyncio.run(go())
 
 
@@ -113,10 +173,11 @@ def test_tamano_desconocido_va_a_fichero_temporal():
         used: list[bool] = []
         captured: dict[str, bytes] = {}
 
-        async def fake_run_upload_path(path, remote, size):
+        async def fake_run_upload_path(path, remote, size, token=None):
             used.append(True)
             captured["data"] = await asyncio.to_thread(lambda: open(path, "rb").read())
             captured["size"] = size
+            up.resolve_bridge(token, 12)
             return FakeMessage(1)
 
         up._run_upload_path = fake_run_upload_path
@@ -154,10 +215,11 @@ def test_zip_grande_se_escribe_en_disco_y_se_borra():
         up._me_id = 999
         captured: dict[str, object] = {}
 
-        async def fake_run_upload_path(path, remote, size):
+        async def fake_run_upload_path(path, remote, size, token=None):
             captured["path"] = path
             captured["size"] = size
             captured["data"] = await asyncio.to_thread(lambda: open(path, "rb").read())
+            up.resolve_bridge(token, 12)
             return FakeMessage(7)
 
         up._run_upload_path = fake_run_upload_path
@@ -170,7 +232,7 @@ def test_zip_grande_se_escribe_en_disco_y_se_borra():
         total = await up.upload(FakeSource(b"datos-zip"), bundle, chat_id=7)
         assert total == 9 and captured["size"] == 9
         assert captured["data"] == b"datos-zip"
-        assert bot.forwarded == [(7, 999, 7)]
+        assert bot.copied == [(7, 999, 12, {"caption": ""})]
         assert not os.path.exists(str(captured["path"]))  # el temporal se borra
     asyncio.run(go())
 
@@ -229,11 +291,16 @@ def test_fallo_en_mtproto_no_deja_hilos_atascados_en_el_puente():
 class FakeParallelClient:
     """Cliente falso: solo se usa ``send_file`` (la subida ya la hizo upload_document)."""
 
-    def __init__(self) -> None:
+    def __init__(self, uploader: TelegramUploader | None = None) -> None:
         self.sent: list[tuple] = []
+        self._uploader = uploader
 
     async def send_file(self, entity, file=None, **kwargs):
         self.sent.append((entity, file, kwargs))
+        caption = kwargs.get("caption") or ""
+        if self._uploader is not None and BRIDGE_PREFIX in caption:
+            # El webhook entrega el message_id de la Bot API del documento recibido.
+            self._uploader.resolve_bridge(caption.split(BRIDGE_PREFIX, 1)[1], 88)
         return FakeMessage(77)
 
 
@@ -245,7 +312,7 @@ def test_subida_paralela_reparte_los_trozos_y_publica_una_sola_vez(monkeypatch):
         )
         loop = asyncio.get_running_loop()
         up._main = up._loop = loop
-        up._client = FakeParallelClient()
+        up._client = FakeParallelClient(up)
         up._bot_entity = object()
         up._me_id = 999
         captured: dict[str, object] = {}
@@ -271,7 +338,7 @@ def test_subida_paralela_reparte_los_trozos_y_publica_una_sola_vez(monkeypatch):
         # El documento ya subido solo se publica: `send_file` recibe el identificador.
         assert len(up._client.sent) == 1
         assert up._client.sent[0][1] is handle
-        assert bot.forwarded == [(7, 999, 77)]
+        assert bot.copied == [(7, 999, 88, {"caption": ""})]
         # Y quedan registrados los tiempos para /stats.
         assert up.last_timing.bytes_uploaded == len(data)
 

@@ -182,6 +182,61 @@ def test_directo_acepta_html_marcado_como_adjunto(monkeypatch):
     run(go())
 
 
+def test_directo_detecta_html_aunque_el_servidor_no_lo_adicione(monkeypatch):
+    """Algunos servidores envían la web con tipo binario: el bot tiene que darse cuenta."""
+    patch_clients(monkeypatch, lambda req: httpx.Response(
+        200, content=b"<!DOCTYPE html><html><head><title>Area de descarga</title></head></html>",
+        headers={"Content-Type": "application/octet-stream"}))
+
+    async def go():
+        with pytest.raises(SourceError, match="página web") as exc:
+            await DirectSource(None).inspect("https://x.example.com/f.rar")
+        assert "Area de descarga" in str(exc.value)
+    run(go())
+
+
+def test_directo_reintenta_sin_range_cuando_viene_una_web(monkeypatch):
+    """Con "Range" el servidor devuelve su portada; sin él, el archivo de verdad."""
+
+    def handler(req):
+        if req.headers.get("Range"):
+            return httpx.Response(200, text="<html><title>Portada</title></html>",
+                                  headers={"Content-Type": "text/html"})
+        return httpx.Response(200, content=BODY, headers={"Content-Type": "application/zip"})
+
+    patch_clients(monkeypatch, handler)
+
+    async def go():
+        (f,) = (await DirectSource(None).inspect("https://x.example.com/f.zip")).files
+        assert (f.name, f.size) == ("f.zip", len(BODY))
+    run(go())
+
+
+def test_directo_avisa_si_el_servidor_bloquea_al_bot(monkeypatch):
+    patch_clients(monkeypatch, lambda req: httpx.Response(
+        200, text="<html><title>Access Denied</title><p>Forbidden</p></html>",
+        headers={"Content-Type": "text/html"}))
+
+    async def go():
+        with pytest.raises(SourceError, match="bloquea") as exc:
+            await DirectSource(None).inspect("https://x.example.com/f.rar")
+        assert "Access Denied" in str(exc.value)
+    run(go())
+
+
+def test_directo_no_sube_una_web_disfrazada_de_binario(monkeypatch):
+    patch_clients(monkeypatch, lambda req: httpx.Response(
+        200, content=b"<!DOCTYPE html><html><title>Hola</title></html>",
+        headers={"Content-Type": "application/octet-stream"}))
+
+    async def go():
+        src = DirectSource(None)
+        remote = direct.RemoteFile("f.rar", 40, "https://x.example.com/f.rar")
+        with pytest.raises(SourceError, match="página web"):
+            await read_all(src.stream(remote))
+    run(go())
+
+
 @pytest.mark.parametrize("status,exc", [(404, SourceError), (403, SourceError), (503, TransientError),
                                          (429, TransientError)])
 def test_directo_traduce_errores_http(monkeypatch, status, exc):
