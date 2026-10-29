@@ -2,6 +2,8 @@ import base64
 
 from app.sources.mediafire import (
     MediaFireSource,
+    _is_cloudflare_challenge,
+    canonical_page,
     parse_deferred_token,
     parse_direct_url,
     parse_error,
@@ -91,6 +93,44 @@ def test_quickkey():
     assert quickkey("https://www.mediafire.com/file_premium/abc123/x.zip/file") == "abc123"
     assert quickkey("https://www.mediafire.com/?abc123") == "abc123"
     assert quickkey("https://www.mediafire.com/folder/xyz/Carpeta") is None
+
+
+def test_quickkey_de_enlace_directo():
+    direct = "https://download2388.mediafire.com/dkeylargo/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar"
+    assert quickkey(direct) == "rdle9nv3j93z9y9"
+    assert quickkey("https://download1.mediafire.com/dkeylargo") is None
+
+
+def test_canonical_page_quita_action_check_y_enlaces_caducados():
+    user = (
+        "https://www.mediafire.com/file/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar/file"
+        "?action=check&dkey=0ir00kshid6&r=168"
+    )
+    assert canonical_page(user) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
+    stale = (
+        "https://download2388.mediafire.com/dkeylargo/"
+        "rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar"
+    )
+    assert canonical_page(stale) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
+    carpeta = "https://www.mediafire.com/folder/xyz/Carpeta"
+    assert canonical_page(carpeta) == carpeta
+    repair = (
+        "https://www.mediafire.com/download_repair.php"
+        "?qkey=rdle9nv3j93z9y9&dkey=0ir00kshid6"
+    )
+    assert canonical_page(repair) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
+
+
+def test_el_enlace_de_reparacion_no_se_confunde_con_el_directo():
+    page = '<a id="downloadButton" href="https://www.mediafire.com/download_repair.php?flag=2">x</a>'
+    assert parse_direct_url(page) is None
+
+
+def test_detecta_el_reto_de_cloudflare_sin_falsos_positivos():
+    assert _is_cloudflare_challenge("<html><title>Just a moment...</title></html>")
+    assert not _is_cloudflare_challenge(
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
+    )
 
 
 def test_detecta_paginas_de_error():

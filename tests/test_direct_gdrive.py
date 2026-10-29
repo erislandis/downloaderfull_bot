@@ -302,13 +302,16 @@ def test_directo_corte_de_conexion_es_transitorio(monkeypatch):
     [
         (f"https://drive.google.com/file/d/{FILE_ID}/view?usp=sharing", ("file", FILE_ID)),
         (f"https://drive.google.com/file/u/0/d/{FILE_ID}/edit", ("file", FILE_ID)),
+        (f"https://drive.google.com/a/example.com/file/d/{FILE_ID}/view", ("file", FILE_ID)),
         (f"https://drive.google.com/open?id={FILE_ID}", ("file", FILE_ID)),
         (f"https://drive.google.com/uc?export=download&id={FILE_ID}", ("file", FILE_ID)),
         (f"https://drive.usercontent.google.com/download?id={FILE_ID}&export=download", ("file", FILE_ID)),
         (f"https://drive.google.com/drive/folders/{FOLDER_ID}?usp=sharing", ("folder", FOLDER_ID)),
         (f"https://drive.google.com/drive/u/1/folders/{FOLDER_ID}", ("folder", FOLDER_ID)),
+        (f"https://drive.google.com/a/example.com/drive/folders/{FOLDER_ID}", ("folder", FOLDER_ID)),
         (f"https://drive.google.com/embeddedfolderview?id={FOLDER_ID}", ("folder", FOLDER_ID)),
         (f"https://docs.google.com/document/d/{FILE_ID}/edit", ("doc", FILE_ID)),
+        (f"https://docs.google.com/a/example.com/document/d/{FILE_ID}/edit", ("doc", FILE_ID)),
         (f"https://docs.google.com/spreadsheets/d/{FILE_ID}/edit#gid=0", ("doc", FILE_ID)),
     ],
 )

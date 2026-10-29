@@ -51,9 +51,13 @@ _NATIVE = {
 _EXPORT_FORMAT = {doc: fmt for doc, fmt in _NATIVE.values()}
 
 _ID = r"[A-Za-z0-9_-]{10,}"
-_FILE_PATH_RE = re.compile(rf"^/file/(?:u/\d+/)?d/({_ID})")
-_FOLDER_PATH_RE = re.compile(rf"^/drive/(?:u/\d+/)?folders/({_ID})")
-_DOC_PATH_RE = re.compile(rf"^/(document|spreadsheets|presentation)/(?:u/\d+/)?d/({_ID})")
+# Los enlaces de cuentas de Google Workspace llevan ``/a/<dominio>/`` delante.
+_ACCOUNT = r"(?:a/[^/]+/)?"
+_FILE_PATH_RE = re.compile(rf"^/{_ACCOUNT}file/(?:u/\d+/)?d/({_ID})")
+_FOLDER_PATH_RE = re.compile(rf"^/{_ACCOUNT}drive/(?:u/\d+/)?folders/({_ID})")
+_DOC_PATH_RE = re.compile(
+    rf"^/{_ACCOUNT}(document|spreadsheets|presentation)/(?:u/\d+/)?d/({_ID})"
+)
 _ID_RE = re.compile(rf"^{_ID}$")
 _ID_QUERY_PATHS = {"/open", "/uc", "/download"}
 

@@ -6,9 +6,9 @@ import os
 import httpx
 import pytest
 
-from app.errors import QuotaExceeded, ResumeNotSupported
+from app.errors import QuotaExceeded, ResumeNotSupported, SourceError
 from app.sources.base import RemoteFile, collect_files, node_to_file
-from app.sources.mediafire import MediaFireSource
+from app.sources.mediafire import MediaFireSource, _Page
 from app.sources.mega import MegaSource, b64e
 from tests.test_mega import encrypt_attrs, encrypt_ctr, file_key_parts
 
@@ -106,6 +106,134 @@ def test_mediafire_malware_descarga_con_post_y_pass():
             assert (f.name, f.size) == ("Peligroso.rar", len(BODY))
             assert await read_all(src.stream(f)) == BODY
             assert await read_all(src.stream(f, 1234)) == BODY[1234:]
+    asyncio.run(go())
+
+
+FRESH = "https://download9.mediafire.com/fresh/abc1234567890xy/Mi%20Juego.zip"
+FRESH_PAGE = (
+    '<div class="filename">Mi Juego.zip</div>'
+    f'<a href="{FRESH}" id="downloadButton">Download</a>'
+)
+
+
+def range_handler(handler):
+    """Envuelve un handler de descarga y responde con rangos como MediaFire."""
+    def wrapped(req):
+        if req.url.host == "www.mediafire.com":
+            return httpx.Response(200, text=FRESH_PAGE)
+        return handler(req)
+    return wrapped
+
+
+def test_mediafire_enlace_directo_caducado_se_vuelve_a_resolver():
+    """Un enlace ``downloadNNN`` de otra IP/caducado no se usa: se pide uno fresco."""
+    seen = []
+
+    def download(req):
+        seen.append(req.url.path)
+        if not req.url.path.startswith("/fresh/"):
+            return httpx.Response(
+                302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
+            )
+        rng = req.headers.get("Range")
+        if not rng:
+            return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
+        start = int(rng.split("=")[1].split("-")[0])
+        part = BODY[:1] if rng == "bytes=0-0" else BODY[start:]
+        return httpx.Response(
+            206,
+            content=part,
+            headers={"Content-Range": f"bytes {start}-{start + len(part) - 1}/{len(BODY)}"},
+        )
+
+    async def go():
+        async with client(range_handler(download), follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            stale = "https://download9.mediafire.com/old/abc1234567890xy/Mi%20Juego.zip"
+            f = (await src.inspect(stale)).files[0]
+            assert f.ref == "https://www.mediafire.com/file/abc1234567890xy/file"
+            assert await read_all(src.stream(f)) == BODY
+    asyncio.run(go())
+    assert "/old/abc1234567890xy/Mi%20Juego.zip" not in seen
+
+
+def test_mediafire_reintenta_cuando_pide_reparar():
+    calls = {"n": 0}
+
+    def download(req):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(
+                302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
+            )
+        rng = req.headers.get("Range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+            return httpx.Response(
+                206,
+                content=BODY[start:],
+                headers={"Content-Range": f"bytes {start}-{len(BODY) - 1}/{len(BODY)}"},
+            )
+        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
+
+    async def go():
+        async with client(range_handler(download), follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            f = RemoteFile("Mi Juego.zip", len(BODY), "https://www.mediafire.com/file/abc/x/file")
+            assert await read_all(src.stream(f)) == BODY
+    asyncio.run(go())
+    assert calls["n"] == 2
+
+
+def test_mediafire_salta_cloudflare_con_curl_cffi(monkeypatch):
+    """Si httpx recibe el reto de Cloudflare, se reintenta con fingerprint de Chrome."""
+    calls = {"n": 0}
+
+    async def fake_impersonating(url):
+        calls["n"] += 1
+        return _Page(200, url, PAGE)
+
+    monkeypatch.setattr(
+        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
+    )
+
+    def download(req):
+        rng = req.headers.get("Range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+            return httpx.Response(
+                206,
+                content=BODY[start:],
+                headers={"Content-Range": f"bytes {start}-{len(BODY) - 1}/{len(BODY)}"},
+            )
+        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
+
+    def handler(req):
+        if req.url.host == "www.mediafire.com":
+            return httpx.Response(403, text="<html><title>Just a moment...</title></html>")
+        return download(req)
+
+    async def go():
+        async with client(handler, follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            f = (await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")).files[0]
+            assert await read_all(src.stream(f)) == BODY
+    asyncio.run(go())
+    assert calls["n"] >= 2
+
+
+def test_mediafire_si_el_repair_persiste_avisa_sin_bucle():
+    def download(req):
+        return httpx.Response(
+            302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
+        )
+
+    async def go():
+        async with client(range_handler(download), follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            f = RemoteFile("x.zip", None, "https://www.mediafire.com/file/abc/x/file")
+            with pytest.raises(SourceError, match="reparar"):
+                await read_all(src.stream(f))
     asyncio.run(go())
 
 

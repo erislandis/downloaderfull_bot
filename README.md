@@ -112,8 +112,8 @@ pero sin `Range` llega el archivo, se reintenta sin esa cabecera.
 
 **Google Drive:** el archivo (o carpeta) debe estar compartido como *«Cualquier persona con el
 enlace»*. Formatos admitidos: `/file/d/<id>`, `open?id=`, `uc?id=`, `drive.usercontent…/download?id=`,
-carpetas `/drive/folders/<id>` y documentos de Google (`docs.google.com/document|spreadsheets|presentation`,
-que se exportan a docx / xlsx / pptx).
+carpetas `/drive/folders/<id>`, cuentas de Workspace (`/a/<dominio>/file/d/<id>`) y documentos de
+Google (`docs.google.com/document|spreadsheets|presentation`, que se exportan a docx / xlsx / pptx).
 
 | | Sin `GOOGLE_API_KEY` | Con `GOOGLE_API_KEY` |
 |---|---|---|
@@ -275,6 +275,10 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
   (salvo el ZIP grande, que es temporal).
 - **Render gratis:** se duerme a los 15 min sin tráfico (el primer mensaje puede tardar ~1 min). Durante
   una transferencia el bot se hace pings a `/healthz`, pero un deploy reinicia el servicio y aborta la subida.
+- **MediaFire:** la página del archivo está protegida por Cloudflare. El bot usa `curl-cffi`
+  (fingerprint de Chrome) cuando `httpx` recibe el reto «Just a moment…» y vuelve a resolver el
+  enlace directo en cada intento: los enlaces `downloadNNN.mediafire.com/…` caducan y están
+  ligados a la IP que abrió la página, así que no se reutilizan.
 - **Mega:** su cuota de transferencia gratuita depende de la IP; las IPs de datacenter (como Render) se
   agotan pronto. El bot informa del tiempo de espera cuando Mega lo indica. Además, las carpetas de Mega
   se montan encriptadas con la clave del enlace: si la clave no es correcta, el bot lo avisa.

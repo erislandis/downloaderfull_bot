@@ -4,8 +4,9 @@ import asyncio
 import base64
 import html as htmllib
 import re
+from dataclasses import dataclass
 from typing import AsyncIterator
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -16,9 +17,35 @@ from .base import Inspection, RemoteFile, Source
 BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+}
+# ``www.mediafire.com`` está detrás de Cloudflare. Para que no devuelva el reto
+# «Just a moment…» hay que enviar las mismas cabeceras que un Chrome real.
+PAGE_HEADERS = {
+    **BROWSER_HEADERS,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+# Los enlaces directos (``downloadNNN.mediafire.com``) no pasan por Cloudflare,
+# pero no conviene pedirles HTML ni compresión.
+DOWNLOAD_HEADERS = {
+    **BROWSER_HEADERS,
+    "Accept": "*/*",
+    "Accept-Encoding": "identity",
 }
 READ_CHUNK = 256 * 1024
 
@@ -50,6 +77,14 @@ _DEFERRED_ENDPOINT = "https://www.mediafire.com/download_link.php"
 _API_ENDPOINT = "https://www.mediafire.com/api/1.4/file/get_info.php"
 _DEFERRED_RETRIES = 4
 _DEFERRED_MAX_WAIT = 10.0
+_STREAM_ATTEMPTS = 2
+_QUICKKEY_RE = re.compile(r"^[A-Za-z0-9]{10,25}$")
+_CF_MARKERS = (
+    "just a moment",
+    "cf-chl",
+    "cf-browser-verification",
+    "checking your browser",
+)
 _ERROR_MARKERS = (
     ("dangerous file blocked", "MediaFire bloqueó este archivo por considerarlo peligroso."),
     ("file removed for violation", "El archivo fue eliminado de MediaFire por infringir sus normas."),
@@ -98,34 +133,54 @@ def _is_usable_href(href: str | None) -> bool:
     return not low.startswith(("javascript:", "blob:", "#", "data:"))
 
 
+def _valid_direct(value: str | None) -> str | None:
+    """Normaliza un enlace de descarga y descarta el «repair» (no es el archivo)."""
+    url = _normalize(value or "")
+    if not url or _REPAIR_MARKER in url:
+        return None
+    return url
+
+
+def _is_cloudflare_challenge(page: str) -> bool:
+    """¿La respuesta es el reto anti-bot de Cloudflare en vez de la página de MediaFire?
+
+    Ojo: la página normal de MediaFire también incluye un script de
+    ``challenge-platform`` de Cloudflare, así que no sirve como señal.
+    """
+    low = page.lower()
+    return any(marker in low for marker in _CF_MARKERS)
+
+
 def parse_direct_url(page: str) -> str | None:
     """Extrae el enlace directo del HTML de MediaFire (función pura, fácil de testear)."""
     m = _BUTTON_RE.search(page)
     if m:
         tag = m.group(0)
-        decoded = _decode_scrambled(_attr(tag, "data-scrambled-url") or "")
+        decoded = _valid_direct(_decode_scrambled(_attr(tag, "data-scrambled-url") or ""))
         if decoded:
             return decoded
         href = _attr(tag, "href")
         if _is_usable_href(href):
-            normalized = _normalize(href or "")
+            normalized = _valid_direct(href)
             if normalized:
                 return normalized
 
     # El botón puede venir sin id o con otro marcado: buscamos la URL en cualquier sitio.
-    decoded = _decode_scrambled(m.group(1) if (m := _SCRAMBLED_RE.search(page)) else "")
+    decoded = _valid_direct(
+        _decode_scrambled(m.group(1) if (m := _SCRAMBLED_RE.search(page)) else "")
+    )
     if decoded:
         return decoded
 
     for regex in (_JSON_URL_RE, _JS_HREF_RE):
         m = regex.search(page)
         if m:
-            normalized = _normalize(m.group(1))
+            normalized = _valid_direct(m.group(1))
             if normalized:
                 return normalized
 
     m = _FALLBACK_RE.search(page)
-    return _normalize(m.group(0)) if m else None
+    return _valid_direct(m.group(0)) if m else None
 
 
 def parse_deferred_token(page: str) -> str | None:
@@ -173,13 +228,36 @@ def parse_filename(page: str, direct_url: str) -> str:
 
 def quickkey(url: str) -> str | None:
     parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) >= 2 and parts[0].lower() in ("file", "file_premium"):
         return parts[1]
+    # Enlaces directos: /<dkey>/<quickkey>/<archivo>
+    if host.startswith("download") and host.endswith("mediafire.com"):
+        if len(parts) >= 3 and _QUICKKEY_RE.match(parts[-2]):
+            return parts[-2]
+        if parts and _QUICKKEY_RE.match(parts[-1]):
+            return parts[-1]
     query = parsed.query.strip()
     if parsed.path.strip("/") == "" and query and "=" not in query and "&" not in query:
         return query
-    return None
+    # Enlaces de reparación: download_repair.php?qkey=…
+    qkey = (parse_qs(parsed.query).get("qkey") or [""])[0]
+    return qkey if _QUICKKEY_RE.match(qkey) else None
+
+
+def canonical_page(url: str) -> str:
+    """URL canónica de la página del archivo.
+
+    Los enlaces ``downloadNNN.mediafire.com/...`` caducan y están ligados a la IP que
+    abrió la página, así que nunca se usan tal cual: se vuelve a pedir la página del
+    archivo para obtener un enlace directo fresco. También se quitan los parámetros
+    ``?action=check&dkey=…`` que Cloudflare bloquea.
+    """
+    key = quickkey(url)
+    if key:
+        return f"https://www.mediafire.com/file/{key}/file"
+    return url
 
 
 def _page_title(page: str) -> str:
@@ -195,6 +273,19 @@ def _is_folder_path(url: str) -> bool:
 
 def _is_view_path(url: str) -> bool:
     return urlparse(url).path.lower().startswith("/view/")
+
+
+@dataclass(frozen=True)
+class _Page:
+    """Respuesta HTML de la página del archivo (venga de httpx o de curl_cffi)."""
+
+    status: int
+    url: str
+    text: str
+
+
+class _RepairRequired(Exception):
+    """MediaFire redirigió el enlace directo a ``download_repair.php`` (caducado)."""
 
 
 class MediaFireSource(Source):
@@ -245,16 +336,34 @@ class MediaFireSource(Source):
         return (str(name), size) if name else None
 
     async def stream(self, file: RemoteFile, offset: int = 0) -> AsyncIterator[bytes]:
-        # Se vuelve a resolver en cada intento: los enlaces directos caducan.
-        direct, _, _, post_data = await self._resolve(file.ref)
-        headers = dict(BROWSER_HEADERS)
+        # Se vuelve a resolver en cada intento: los enlaces directos caducan y están
+        # ligados a la IP que abrió la página, así que nunca se reutilizan.
+        for attempt in range(_STREAM_ATTEMPTS):
+            direct, _, _, post_data = await self._resolve(file.ref)
+            try:
+                async for chunk in self._stream_direct(direct, post_data, offset):
+                    yield chunk
+                return
+            except _RepairRequired:
+                if attempt + 1 >= _STREAM_ATTEMPTS:
+                    break
+                await asyncio.sleep(1.0)
+        raise SourceError(
+            "MediaFire pidió reparar la descarga y no entregó el archivo. "
+            "Vuelve a enviar el enlace público del archivo."
+        )
+
+    async def _stream_direct(
+        self, direct: str, post_data: dict[str, str], offset: int
+    ) -> AsyncIterator[bytes]:
+        headers = dict(DOWNLOAD_HEADERS)
         if offset:
             headers["Range"] = f"bytes={offset}-"
         method = "POST" if post_data else "GET"
         extra = {"data": post_data} if post_data else {}
         async with self._http.stream(method, direct, headers=headers, **extra) as r:
             if _REPAIR_MARKER in str(r.url):
-                raise TransientError("MediaFire pidió reparar el enlace de descarga; reintentando.")
+                raise _RepairRequired()
             if offset and r.status_code != 206:
                 raise ResumeNotSupported("MediaFire no permite reanudar esta descarga.")
             self._check_status(r.status_code)
@@ -266,36 +375,63 @@ class MediaFireSource(Source):
 
     # -- internos ---------------------------------------------------------------------
 
-    async def _resolve(self, url: str) -> tuple[str, str, str, dict[str, str]]:
-        host = (urlparse(url).hostname or "").lower()
-        if host.startswith("download"):
-            return url, "", url, {}  # ya es un enlace directo
-
+    async def _fetch_page(self, url: str) -> _Page:
+        """Pide la página del archivo; si Cloudflare la bloquea, imita a un Chrome real."""
         try:
-            r = await self._http.get(url, headers=BROWSER_HEADERS)
+            r = await self._http.get(url, headers=PAGE_HEADERS)
         except httpx.HTTPError as exc:
             raise TransientError("No pude conectar con MediaFire.") from exc
-        if r.status_code in (404, 410):
-            raise SourceError("El archivo no existe o fue eliminado.")
-        self._check_status(r.status_code)
+        page = _Page(r.status_code, str(r.url), r.text)
+        if _is_cloudflare_challenge(page.text):
+            return await self._fetch_page_impersonating(url)
+        return page
 
-        final_url = str(r.url)
+    @staticmethod
+    async def _fetch_page_impersonating(url: str) -> _Page:
+        """Cloudflare valida el fingerprint TLS de httpx; curl_cffi usa el de Chrome."""
+        try:
+            from curl_cffi.requests import AsyncSession
+        except ImportError:
+            raise SourceError(
+                "MediaFire está bloqueando las descargas desde el servidor "
+                "(verificación de Cloudflare). Falta la dependencia curl-cffi."
+            ) from None
+        try:
+            async with AsyncSession() as session:
+                r = await session.get(url, impersonate="chrome", allow_redirects=True, timeout=30)
+        except Exception as exc:  # noqa: BLE001  # errores propios de curl_cffi
+            raise TransientError("No pude conectar con MediaFire.") from exc
+        return _Page(int(r.status_code), str(r.url), r.text)
+
+    async def _resolve(self, url: str) -> tuple[str, str, str, dict[str, str]]:
+        page = await self._fetch_page(canonical_page(url))
+        if _is_cloudflare_challenge(page.text):
+            raise SourceError(
+                "MediaFire está bloqueando las descargas desde el servidor "
+                "(verificación de Cloudflare). Inténtalo de nuevo más tarde."
+            )
+        if page.status in (404, 410):
+            raise SourceError("El archivo no existe o fue eliminado.")
+        self._check_status(page.status)
+
+        final_url = page.url
         if _is_folder_path(final_url):
             raise SourceError("Es una carpeta de MediaFire; solo acepto enlaces de archivos sueltos.")
         if _is_view_path(final_url):
             raise SourceError("Ese enlace es una vista previa, no un archivo descargable.")
 
-        page = r.text
-        post_data = parse_post_data(page)
-        direct = parse_direct_url(page)
-        if not direct:
-            token = parse_deferred_token(page)
-            if token:
-                direct = await self._deferred_download(token, final_url)
-            else:
-                message = parse_error(page) or self._unexpected_page(page)
-                raise SourceError(message)
-        return direct, page, final_url, post_data
+        html = page.text
+        direct = parse_direct_url(html)
+        if direct:
+            # El botón normal se descarga con GET; ``pass`` solo hace falta cuando el
+            # enlace lo genera la API de descarga diferida (archivos con aviso).
+            return direct, html, final_url, {}
+        token = parse_deferred_token(html)
+        if token:
+            direct = await self._deferred_download(token, final_url)
+            return direct, html, final_url, parse_post_data(html)
+        message = parse_error(html) or self._unexpected_page(html)
+        raise SourceError(message)
 
     async def _deferred_download(self, token: str, referer: str) -> str:
         """Archivos marcados como malware: el enlace se genera con un POST."""
@@ -351,7 +487,7 @@ class MediaFireSource(Source):
         self, direct: str, post_data: dict[str, str] | None = None
     ) -> tuple[int | None, bool]:
         """Devuelve (tamaño, admite_rangos) pidiendo solo el primer byte."""
-        headers = {**BROWSER_HEADERS, "Range": "bytes=0-0"}
+        headers = {**DOWNLOAD_HEADERS, "Range": "bytes=0-0"}
         method = "POST" if post_data else "GET"
         extra = {"data": post_data} if post_data else {}
         try:
