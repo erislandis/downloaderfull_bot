@@ -276,9 +276,13 @@ Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot 
 - **Render gratis:** se duerme a los 15 min sin tráfico (el primer mensaje puede tardar ~1 min). Durante
   una transferencia el bot se hace pings a `/healthz`, pero un deploy reinicia el servicio y aborta la subida.
 - **MediaFire:** la página del archivo está protegida por Cloudflare. El bot usa `curl-cffi`
-  (fingerprint de Chrome) cuando `httpx` recibe el reto «Just a moment…» y vuelve a resolver el
-  enlace directo en cada intento: los enlaces `downloadNNN.mediafire.com/…` caducan y están
-  ligados a la IP que abrió la página, así que no se reutilizan.
+  (fingerprint de Chrome) cuando `httpx` recibe el reto «Just a moment…», probando varios perfiles
+  con espera creciente y volviendo a resolver el enlace directo en cada intento. Aun así, Cloudflare
+  también decide por **reputación de IP**: en las IPs compartidas de Render el reto suele persistir
+  aunque el fingerprint sea correcto. Tras agotar los reintentos el bot lo dice claramente; en ese
+  caso hay que usar otro mirror (Mega, Drive o enlace directo) o desplegar el bot tras una IP no
+  bloqueada (proxy residencial). Los enlaces `downloadNNN.mediafire.com/…` caducan y están ligados
+  a la IP que abrió la página, así que no se reutilizan.
 - **Mega:** su cuota de transferencia gratuita depende de la IP; las IPs de datacenter (como Render) se
   agotan pronto. El bot informa del tiempo de espera cuando Mega lo indica. Además, las carpetas de Mega
   se montan encriptadas con la clave del enlace: si la clave no es correcta, el bot lo avisa.

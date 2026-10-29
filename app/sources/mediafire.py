@@ -78,6 +78,16 @@ _API_ENDPOINT = "https://www.mediafire.com/api/1.4/file/get_info.php"
 _DEFERRED_RETRIES = 4
 _DEFERRED_MAX_WAIT = 10.0
 _STREAM_ATTEMPTS = 2
+# Cloudflare bloquea por reputación de IP, no solo por fingerprint TLS. En las IPs
+# compartidas de Render el reto suele persistir: se prueban varios perfiles de Chrome
+# con espera creciente y, si aun así no cede, se avisa de que no es culpa del enlace.
+_IMPERSONATE_PROFILES = ("chrome", "chrome131", "safari17_0")
+_CF_RETRY_DELAYS = (1.0, 2.5)
+_CF_BLOCKED_MESSAGE = (
+    "MediaFire está bloqueando las descargas desde la IP de este servidor "
+    "(verificación de Cloudflare de datacenter). No es un fallo del enlace: "
+    "reinténtalo más tarde o usa otro mirror (Mega, Drive o un enlace directo)."
+)
 _QUICKKEY_RE = re.compile(r"^[A-Za-z0-9]{10,25}$")
 _CF_MARKERS = (
     "just a moment",
@@ -388,7 +398,12 @@ class MediaFireSource(Source):
 
     @staticmethod
     async def _fetch_page_impersonating(url: str) -> _Page:
-        """Cloudflare valida el fingerprint TLS de httpx; curl_cffi usa el de Chrome."""
+        """Cloudflare valida el fingerprint TLS de httpx; curl_cffi usa el de Chrome.
+
+        Se prueban varios perfiles con espera creciente. Esto ayuda cuando el bloqueo
+        es por fingerprint, pero **no** cambia la IP: si Cloudflare marca la IP del
+        datacenter, el reto seguirá apareciendo y el llamador avisará al usuario.
+        """
         try:
             from curl_cffi.requests import AsyncSession
         except ImportError:
@@ -396,20 +411,36 @@ class MediaFireSource(Source):
                 "MediaFire está bloqueando las descargas desde el servidor "
                 "(verificación de Cloudflare). Falta la dependencia curl-cffi."
             ) from None
-        try:
-            async with AsyncSession() as session:
-                r = await session.get(url, impersonate="chrome", allow_redirects=True, timeout=30)
-        except Exception as exc:  # noqa: BLE001  # errores propios de curl_cffi
-            raise TransientError("No pude conectar con MediaFire.") from exc
-        return _Page(int(r.status_code), str(r.url), r.text)
+        headers = {"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        last: _Page | None = None
+        for attempt, profile in enumerate(_IMPERSONATE_PROFILES):
+            if attempt:
+                await asyncio.sleep(_CF_RETRY_DELAYS[min(attempt - 1, len(_CF_RETRY_DELAYS) - 1)])
+            try:
+                async with AsyncSession() as session:
+                    r = await session.get(
+                        url,
+                        impersonate=profile,
+                        headers=headers,
+                        allow_redirects=True,
+                        timeout=30,
+                    )
+            except Exception:  # noqa: BLE001  # perfil no soportado o fallo de curl_cffi
+                continue
+            page = _Page(int(r.status_code), str(r.url), r.text)
+            if not _is_cloudflare_challenge(page.text):
+                return page
+            last = page
+        if last is None:
+            raise TransientError("No pude conectar con MediaFire.")
+        return last
 
     async def _resolve(self, url: str) -> tuple[str, str, str, dict[str, str]]:
         page = await self._fetch_page(canonical_page(url))
         if _is_cloudflare_challenge(page.text):
-            raise SourceError(
-                "MediaFire está bloqueando las descargas desde el servidor "
-                "(verificación de Cloudflare). Inténtalo de nuevo más tarde."
-            )
+            # Transitorio para que el bot reintente con espera; al agotarse, este mismo
+            # mensaje explica que el problema es la IP del servidor, no el enlace.
+            raise TransientError(_CF_BLOCKED_MESSAGE)
         if page.status in (404, 410):
             raise SourceError("El archivo no existe o fue eliminado.")
         self._check_status(page.status)

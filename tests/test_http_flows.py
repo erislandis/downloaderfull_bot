@@ -6,7 +6,7 @@ import os
 import httpx
 import pytest
 
-from app.errors import QuotaExceeded, ResumeNotSupported, SourceError
+from app.errors import QuotaExceeded, ResumeNotSupported, SourceError, TransientError
 from app.sources.base import RemoteFile, collect_files, node_to_file
 from app.sources.mediafire import MediaFireSource, _Page
 from app.sources.mega import MegaSource, b64e
@@ -220,6 +220,27 @@ def test_mediafire_salta_cloudflare_con_curl_cffi(monkeypatch):
             assert await read_all(src.stream(f)) == BODY
     asyncio.run(go())
     assert calls["n"] >= 2
+
+
+def test_mediafire_cloudflare_persistente_avisa_de_la_ip(monkeypatch):
+    """Si el reto sigue tras imitar a Chrome, el fallo es transitorio y lo explica."""
+
+    async def fake_impersonating(url):
+        return _Page(403, url, "<html><title>Just a moment...</title></html>")
+
+    monkeypatch.setattr(
+        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
+    )
+
+    def handler(req):
+        return httpx.Response(403, text="<html><title>Just a moment...</title></html>")
+
+    async def go():
+        async with client(handler, follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            with pytest.raises(TransientError, match="Cloudflare"):
+                await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")
+    asyncio.run(go())
 
 
 def test_mediafire_si_el_repair_persiste_avisa_sin_bucle():
