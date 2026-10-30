@@ -12,6 +12,7 @@ import httpx
 
 from .config import Settings
 from .errors import DriveError, Realign, ResumeNotSupported, TransientError
+from .token_store import TokenStore
 
 log = logging.getLogger(__name__)
 
@@ -101,30 +102,67 @@ class UploadSession:
 
 
 class DriveClient:
-    def __init__(self, settings: Settings, http: httpx.AsyncClient) -> None:
-        self._s, self._http = settings, http
+    def __init__(
+        self, settings: Settings, http: httpx.AsyncClient, store: TokenStore | None = None
+    ) -> None:
+        self._s, self._http, self._store = settings, http, store
         self._token: str | None = None
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
         self._folder_id: str | None = None
+        self._refresh_token = (store.load() if store else None) or settings.google_refresh_token
+
+    @property
+    def has_auth(self) -> bool:
+        return bool(self._refresh_token)
+
+    def set_refresh_token(self, refresh_token: str, *, persist: bool = True) -> None:
+        """Activa un token recién obtenido por el navegador y lo guarda si es posible."""
+        self._refresh_token = refresh_token
+        self._token = None
+        self._expires_at = 0.0
+        self._folder_id = None
+        if persist and self._store is not None:
+            try:
+                self._store.save(refresh_token)
+            except OSError:
+                log.warning("No pude guardar el refresh token en disco", exc_info=True)
+
+    def clear_refresh_token(self) -> None:
+        self._refresh_token = None
+        self._token = None
+        self._expires_at = 0.0
+        self._folder_id = None
+        if self._store is not None:
+            self._store.clear()
 
     async def _access_token(self) -> str:
         async with self._lock:
             if self._token and time.monotonic() < self._expires_at - 60:
                 return self._token
+            refresh_token = self._refresh_token
+            if not refresh_token:
+                raise DriveError(
+                    "Google Drive no está conectado. Envía /conectar para autorizar la cuenta desde el navegador."
+                )
+            if not self._s.google_client_id or not self._s.google_client_secret:
+                raise DriveError(
+                    "Faltan GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en el servidor. Añádelos y redeploya."
+                )
             r = await self._http.post(
                 TOKEN_URL,
                 data={
                     "client_id": self._s.google_client_id,
                     "client_secret": self._s.google_client_secret,
-                    "refresh_token": self._s.google_refresh_token,
+                    "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
             )
             if r.status_code != 200:
                 if "invalid_grant" in r.text:
+                    self.clear_refresh_token()
                     raise DriveError(
-                        "El permiso de Google Drive caducó o fue revocado. Genera un nuevo refresh token."
+                        "El permiso de Google Drive caducó o fue revocado. Envía /conectar para renovarlo."
                     )
                 if r.status_code >= 500:
                     raise TransientError("Google no responde al renovar el acceso.")

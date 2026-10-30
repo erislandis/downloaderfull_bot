@@ -11,6 +11,7 @@ from .runtime import Runtime
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     runtime = Runtime(Settings.from_env())
+    await runtime.bootstrap()
     await runtime.bot.delete_webhook()
     runtime.start_background()
     try:

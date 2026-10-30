@@ -19,5 +19,4 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: GOOGLE_REFRESH_TOKEN
-        sync: false
+      # El refresh token se obtiene con /conectar y se guarda cifrado en Telegram.

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 from html import escape
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import httpx
 from aiogram import BaseMiddleware, Dispatcher, F, Router
@@ -19,9 +19,13 @@ from .config import Settings
 from .drive import DriveClient
 from .errors import BridgeError
 from .jobs import Job, JobManager
+from .oauth import OAuthService
 from .sources import SOURCES, resolve_source
 from .sources.base import RemoteFile, Source
 from .utils import human_size
+
+if TYPE_CHECKING:  # pragma: no cover - evita el import circular en tiempo de ejecución
+    from .runtime import Runtime
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +36,8 @@ PENDING_TTL = 15 * 60
 HELP = (
     "👋 Envíame un enlace de <b>{sites}</b> y lo paso a tu Google Drive.\n"
     "Te devolveré un enlace directo para tu bot de descargas.\n\n"
+    "/conectar – autoriza Google Drive desde el navegador\n"
+    "/desconectar – olvida la autorización de Google Drive\n"
     "/cancelar – cancela tus transferencias\n"
     "/limpiar – borra de Drive todo lo que subió el bot\n"
     "/espacio – espacio libre en Drive"
@@ -52,6 +58,8 @@ class Services:
     http: httpx.AsyncClient
     drive: DriveClient
     jobs: JobManager
+    runtime: "Runtime"
+    oauth: OAuthService
     pending: dict[str, Pending] = field(default_factory=dict)
 
 
@@ -96,8 +104,32 @@ def build_dispatcher(services: Services) -> Dispatcher:
             return
         await message.answer(f"🧹 Borré {n} archivo(s) de tu Drive.")
 
+    @router.message(Command("conectar"))
+    async def connect(message: Message, services: Services) -> None:
+        try:
+            url = services.oauth.start_url(message.from_user.id)
+        except BridgeError as exc:
+            await message.answer(f"❌ {escape(str(exc))}")
+            return
+        href = escape(url, quote=True)
+        await message.answer(
+            "🔐 <b>Conecta tu Google Drive</b>\n"
+            f'<a href="{href}">Abrir la autorización de Google</a>\n\n'
+            f"<code>{escape(url)}</code>\n\n"
+            "El enlace caduca en 15 minutos. Al terminar, Drive quedará conectado.",
+            disable_web_page_preview=True,
+        )
+
+    @router.message(Command("desconectar"))
+    async def disconnect(message: Message, services: Services) -> None:
+        await services.runtime.forget_drive_token(message.from_user.id)
+        await message.answer("🔓 Autorización de Google Drive olvidada. Usa /conectar para volver a conectarla.")
+
     @router.message(Command("espacio"))
     async def space(message: Message, services: Services) -> None:
+        if not services.drive.has_auth:
+            await message.answer("🔐 Google Drive no está conectado. Usa /conectar.")
+            return
         free = await services.drive.free_bytes()
         await message.answer("Espacio libre en Drive: " + (human_size(free) if free is not None else "ilimitado o no disponible"))
 
@@ -132,6 +164,9 @@ def build_dispatcher(services: Services) -> Dispatcher:
 
 
 async def _handle_url(message: Message, services: Services, url: str) -> None:
+    if not services.drive.has_auth:
+        await message.answer("🔐 Google Drive no está conectado. Usa /conectar para autorizarlo desde el navegador.")
+        return
     source = resolve_source(url, services.http)
     if source is None:
         await message.answer("Ese sitio no está soportado. Acepto: " + ", ".join(s.label for s in SOURCES) + ".")
