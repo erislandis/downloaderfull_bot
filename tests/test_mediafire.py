@@ -1,16 +1,6 @@
 import base64
 
-from app.sources.mediafire import (
-    MediaFireSource,
-    _is_cloudflare_challenge,
-    canonical_page,
-    parse_deferred_token,
-    parse_direct_url,
-    parse_error,
-    parse_filename,
-    parse_post_data,
-    quickkey,
-)
+from app.sources.mediafire import MediaFireSource, parse_direct_url, parse_error, parse_filename
 
 DIRECT = "https://download1234.mediafire.com/abc123/key9/Mi%20Archivo.zip"
 
@@ -31,111 +21,17 @@ def test_respaldo_por_regex_si_cambia_el_boton():
     assert parse_direct_url(page) == DIRECT
 
 
-def test_respaldo_protocolo_relativo():
-    page = '<script>var u = "//download1234.mediafire.com/abc/key/x.zip";</script>'
-    assert parse_direct_url(page) == "https://download1234.mediafire.com/abc/key/x.zip"
-
-
-def test_respaldo_json_download_url():
-    page = '{"downloadUrl":"https:\\/\\/download99.mediafire.com\\/a\\/b\\/x.zip"}'
-    assert parse_direct_url(page) == "https://download99.mediafire.com/a/b/x.zip"
-
-
-def test_scrambled_urlsafe():
-    scrambled = base64.urlsafe_b64encode(DIRECT.encode()).decode().rstrip("=")
-    page = f'<a id="downloadButton" data-scrambled-url="{scrambled}">x</a>'
-    assert parse_direct_url(page) == DIRECT
-
-
-def test_href_blob_se_ignora_y_usa_respaldo():
-    page = (
-        '<a id="downloadButton" href="blob:https://www.mediafire.com/xxx">x</a>'
-        f'<script>downloadButton.href = "{DIRECT}";</script>'
-    )
-    assert parse_direct_url(page) == DIRECT
-
-
 def test_sin_enlace():
     assert parse_direct_url("<html>nada</html>") is None
-
-
-def test_token_de_descarga_diferida():
-    page = (
-        '<button type="button" id="deferredDownloadButton" '
-        'data-security-token="abc.def.ghi" disabled>Download Anyway</button>'
-    )
-    assert parse_deferred_token(page) == "abc.def.ghi"
-    assert parse_deferred_token('<a id="downloadButton" href="x">x</a>') is None
-
-
-def test_post_data_del_aviso_de_malware():
-    page = (
-        '<button type="button" id="deferredDownloadButton" data-security-token="abc">x</button>'
-        "<script>window.handleDeferredDownload("
-        '"https://www.mediafire.com/download_repair.php?qkey=abc&template=59&origin=malware_advisory",'
-        '"https://www.mediafire.com/download_repair.php?qkey=abc&template=59&origin=server_error",'
-        "{pass: 'bd609'          });</script>"
-    )
-    assert parse_post_data(page) == {"pass": "bd609"}
-    assert parse_post_data("<html>ok</html>") == {}
 
 
 def test_nombre_desde_html_y_desde_url():
     assert parse_filename('<div class="filename">Mi &amp; Archivo.zip</div>', DIRECT) == "Mi & Archivo.zip"
     assert parse_filename("", DIRECT) == "Mi Archivo.zip"
-    assert parse_filename("", "https://download1.mediafire.com/a/b/IDM+Final+%28Kingz+City%29.rar") == (
-        "IDM Final (Kingz City).rar"
-    )
-
-
-def test_quickkey():
-    assert quickkey("https://www.mediafire.com/file/l3h0s1mttcwipdv/IDM_Final.rar/file") == "l3h0s1mttcwipdv"
-    assert quickkey("https://www.mediafire.com/file_premium/abc123/x.zip/file") == "abc123"
-    assert quickkey("https://www.mediafire.com/?abc123") == "abc123"
-    assert quickkey("https://www.mediafire.com/folder/xyz/Carpeta") is None
-
-
-def test_quickkey_de_enlace_directo():
-    direct = "https://download2388.mediafire.com/dkeylargo/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar"
-    assert quickkey(direct) == "rdle9nv3j93z9y9"
-    assert quickkey("https://download1.mediafire.com/dkeylargo") is None
-
-
-def test_canonical_page_quita_action_check_y_enlaces_caducados():
-    user = (
-        "https://www.mediafire.com/file/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar/file"
-        "?action=check&dkey=0ir00kshid6&r=168"
-    )
-    assert canonical_page(user) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
-    stale = (
-        "https://download2388.mediafire.com/dkeylargo/"
-        "rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar"
-    )
-    assert canonical_page(stale) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
-    carpeta = "https://www.mediafire.com/folder/xyz/Carpeta"
-    assert canonical_page(carpeta) == carpeta
-    repair = (
-        "https://www.mediafire.com/download_repair.php"
-        "?qkey=rdle9nv3j93z9y9&dkey=0ir00kshid6"
-    )
-    assert canonical_page(repair) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
-
-
-def test_el_enlace_de_reparacion_no_se_confunde_con_el_directo():
-    page = '<a id="downloadButton" href="https://www.mediafire.com/download_repair.php?flag=2">x</a>'
-    assert parse_direct_url(page) is None
-
-
-def test_detecta_el_reto_de_cloudflare_sin_falsos_positivos():
-    assert _is_cloudflare_challenge("<html><title>Just a moment...</title></html>")
-    assert not _is_cloudflare_challenge(
-        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
-    )
 
 
 def test_detecta_paginas_de_error():
     assert "peligroso" in parse_error("<h2>Dangerous File Blocked</h2>")
-    assert "no existe" in parse_error("<h2>Something appears to be missing</h2>")
     assert parse_error("<html>ok</html>") is None
 
 

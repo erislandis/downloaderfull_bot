@@ -13,17 +13,11 @@ services:
         generateValue: true
       - key: BOT_TOKEN
         sync: false
-      - key: ADMIN_USER_IDS
+      - key: ALLOWED_USER_IDS
         sync: false
-      - key: TELEGRAM_API_ID
+      - key: GOOGLE_CLIENT_ID
         sync: false
-      - key: TELEGRAM_API_HASH
+      - key: GOOGLE_CLIENT_SECRET
         sync: false
-      - key: TELEGRAM_SESSION
+      - key: GOOGLE_REFRESH_TOKEN
         sync: false
-      - key: GOOGLE_API_KEY  # opcional: activa las carpetas de Google Drive
-        sync: false
-      - key: MT_UPLOAD_PARALLEL
-        value: "6"
-      - key: ZIP_LEVEL
-        value: "1"

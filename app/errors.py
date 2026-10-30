@@ -23,8 +23,16 @@ class TransientError(BridgeError):
 
 
 class ResumeNotSupported(BridgeError):
-    """El origen no permite reanudar: hay que empezar de cero."""
+    """El origen o la sesión de subida no permite reanudar: hay que empezar de cero."""
 
 
-class UploadError(BridgeError):
-    """Error al entregar el archivo por Telegram."""
+class DriveError(BridgeError):
+    """Error de Google Drive."""
+
+
+class Realign(Exception):
+    """Drive confirmó menos bytes de los enviados; se reanuda desde `offset`."""
+
+    def __init__(self, offset: int) -> None:
+        super().__init__(offset)
+        self.offset = offset

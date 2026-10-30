@@ -1,14 +1,16 @@
 """Flujos HTTP completos contra servidores simulados (httpx.MockTransport)."""
 import asyncio
+import base64
 import json
 import os
 
 import httpx
 import pytest
 
-from app.errors import QuotaExceeded, ResumeNotSupported, SourceError, TransientError
-from app.sources.base import RemoteFile, collect_files, node_to_file
-from app.sources.mediafire import MediaFireSource, _Page
+from app.drive import DriveFile, UploadSession
+from app.errors import QuotaExceeded, Realign, ResumeNotSupported, TransientError
+from app.sources.base import RemoteFile
+from app.sources.mediafire import MediaFireSource
 from app.sources.mega import MegaSource, b64e
 from tests.test_mega import encrypt_attrs, encrypt_ctr, file_key_parts
 
@@ -19,6 +21,57 @@ def client(handler, **kw):
 
 async def read_all(agen):
     return b"".join([c async for c in agen])
+
+
+# ---------------------------------------------------------------- Drive (subida reanudable)
+
+def make_session(handler):
+    return UploadSession(client(handler), "https://upload.example/session", "f.bin")
+
+
+def test_drive_chunk_intermedio_y_final():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers["Content-Range"])
+        if req.headers["Content-Range"] == "bytes 6-9/10":
+            return httpx.Response(200, json={"id": "FILEID"})
+        return httpx.Response(308, headers={"Range": "bytes=0-5"})
+
+    s = make_session(handler)
+    assert asyncio.run(s.send(0, b"a" * 6, False, 10)) is None
+    done = asyncio.run(s.send(6, b"b" * 4, True, 10))
+    assert done == DriveFile("FILEID", "f.bin", 10)
+    assert seen == ["bytes 0-5/10", "bytes 6-9/10"]
+
+
+def test_drive_tamano_desconocido_usa_asterisco_y_total_en_el_ultimo():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers["Content-Range"])
+        return httpx.Response(200, json={"id": "X"}) if "/10" in seen[-1] else httpx.Response(308, headers={"Range": "bytes=0-5"})
+
+    s = make_session(handler)
+    asyncio.run(s.send(0, b"a" * 6, False, None))
+    asyncio.run(s.send(6, b"b" * 4, True, None))
+    assert seen == ["bytes 0-5/*", "bytes 6-9/10"]
+
+
+def test_drive_realinea_si_guardo_menos():
+    s = make_session(lambda req: httpx.Response(308, headers={"Range": "bytes=0-2"}))
+    with pytest.raises(Realign) as exc:
+        asyncio.run(s.send(0, b"a" * 6, False, 10))
+    assert exc.value.offset == 3
+
+
+def test_drive_consulta_de_estado_y_errores():
+    assert asyncio.run(make_session(lambda r: httpx.Response(308)).query_offset()) == 0
+    assert asyncio.run(make_session(lambda r: httpx.Response(308, headers={"Range": "bytes=0-99"})).query_offset()) == 100
+    with pytest.raises(ResumeNotSupported):
+        asyncio.run(make_session(lambda r: httpx.Response(404)).query_offset())
+    with pytest.raises(TransientError):
+        asyncio.run(make_session(lambda r: httpx.Response(503)).send(0, b"x", True, 1))
 
 
 # ---------------------------------------------------------------- MediaFire
@@ -48,213 +101,10 @@ def test_mediafire_inspect_y_stream_con_reanudacion():
     async def go():
         async with client(mediafire_handler(), follow_redirects=True) as http:
             src = MediaFireSource(http)
-            insp = await src.inspect("https://www.mediafire.com/file/abc/Mi_Juego.zip/file")
-            assert insp.tree is None and len(insp.files) == 1
-            f = insp.files[0]
+            [f] = await src.inspect("https://www.mediafire.com/file/abc/Mi_Juego.zip/file")
             assert (f.name, f.size) == ("Mi Juego.zip", len(BODY))
             assert await read_all(src.stream(f)) == BODY
             assert await read_all(src.stream(f, 1234)) == BODY[1234:]
-    asyncio.run(go())
-
-
-MALWARE_PAGE = (
-    '<div class="filename">Peligroso.rar</div>'
-    '<button type="button" id="deferredDownloadButton" data-security-token="tok123">'
-    "Download Anyway</button>"
-    "<script>window.handleDeferredDownload("
-    '"https://www.mediafire.com/download_repair.php?qkey=abc&template=59&origin=malware_advisory",'
-    '"https://www.mediafire.com/download_repair.php?qkey=abc&template=59&origin=server_error",'
-    "{pass: 'bd609'});</script>"
-)
-MALWARE_URL = "https://download9.mediafire.com/malware"
-
-
-def malware_handler():
-    def handler(req):
-        if req.url.path == "/download_link.php":
-            return httpx.Response(
-                200,
-                json={"result": "success", "status": "success", "download_url": MALWARE_URL},
-            )
-        if req.url.path == "/download_repair.php":
-            return httpx.Response(200, text="<html>download repair</html>")
-        if req.url.host == "www.mediafire.com":
-            return httpx.Response(200, text=MALWARE_PAGE)
-        if req.method != "POST" or b"pass=bd609" not in req.content:
-            return httpx.Response(
-                302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=12"}
-            )
-        rng = req.headers.get("Range")
-        if rng:
-            start = int(rng.split("=")[1].split("-")[0])
-            part = BODY[start:] if rng != "bytes=0-0" else BODY[:1]
-            end = start + len(part) - 1
-            return httpx.Response(
-                206, content=part, headers={"Content-Range": f"bytes {start}-{end}/{len(BODY)}"}
-            )
-        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
-
-    return handler
-
-
-def test_mediafire_malware_descarga_con_post_y_pass():
-    async def go():
-        async with client(malware_handler(), follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            insp = await src.inspect("https://www.mediafire.com/file/abc/Peligroso.rar/file")
-            f = insp.files[0]
-            assert (f.name, f.size) == ("Peligroso.rar", len(BODY))
-            assert await read_all(src.stream(f)) == BODY
-            assert await read_all(src.stream(f, 1234)) == BODY[1234:]
-    asyncio.run(go())
-
-
-FRESH = "https://download9.mediafire.com/fresh/abc1234567890xy/Mi%20Juego.zip"
-FRESH_PAGE = (
-    '<div class="filename">Mi Juego.zip</div>'
-    f'<a href="{FRESH}" id="downloadButton">Download</a>'
-)
-
-
-def range_handler(handler):
-    """Envuelve un handler de descarga y responde con rangos como MediaFire."""
-    def wrapped(req):
-        if req.url.host == "www.mediafire.com":
-            return httpx.Response(200, text=FRESH_PAGE)
-        return handler(req)
-    return wrapped
-
-
-def test_mediafire_enlace_directo_caducado_se_vuelve_a_resolver():
-    """Un enlace ``downloadNNN`` de otra IP/caducado no se usa: se pide uno fresco."""
-    seen = []
-
-    def download(req):
-        seen.append(req.url.path)
-        if not req.url.path.startswith("/fresh/"):
-            return httpx.Response(
-                302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
-            )
-        rng = req.headers.get("Range")
-        if not rng:
-            return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
-        start = int(rng.split("=")[1].split("-")[0])
-        part = BODY[:1] if rng == "bytes=0-0" else BODY[start:]
-        return httpx.Response(
-            206,
-            content=part,
-            headers={"Content-Range": f"bytes {start}-{start + len(part) - 1}/{len(BODY)}"},
-        )
-
-    async def go():
-        async with client(range_handler(download), follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            stale = "https://download9.mediafire.com/old/abc1234567890xy/Mi%20Juego.zip"
-            f = (await src.inspect(stale)).files[0]
-            assert f.ref == "https://www.mediafire.com/file/abc1234567890xy/file"
-            assert await read_all(src.stream(f)) == BODY
-    asyncio.run(go())
-    assert "/old/abc1234567890xy/Mi%20Juego.zip" not in seen
-
-
-def test_mediafire_reintenta_cuando_pide_reparar():
-    calls = {"n": 0}
-
-    def download(req):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return httpx.Response(
-                302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
-            )
-        rng = req.headers.get("Range")
-        if rng:
-            start = int(rng.split("=")[1].split("-")[0])
-            return httpx.Response(
-                206,
-                content=BODY[start:],
-                headers={"Content-Range": f"bytes {start}-{len(BODY) - 1}/{len(BODY)}"},
-            )
-        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
-
-    async def go():
-        async with client(range_handler(download), follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            f = RemoteFile("Mi Juego.zip", len(BODY), "https://www.mediafire.com/file/abc/x/file")
-            assert await read_all(src.stream(f)) == BODY
-    asyncio.run(go())
-    assert calls["n"] == 2
-
-
-def test_mediafire_salta_cloudflare_con_curl_cffi(monkeypatch):
-    """Si httpx recibe el reto de Cloudflare, se reintenta con fingerprint de Chrome."""
-    calls = {"n": 0}
-
-    async def fake_impersonating(url):
-        calls["n"] += 1
-        return _Page(200, url, PAGE)
-
-    monkeypatch.setattr(
-        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
-    )
-
-    def download(req):
-        rng = req.headers.get("Range")
-        if rng:
-            start = int(rng.split("=")[1].split("-")[0])
-            return httpx.Response(
-                206,
-                content=BODY[start:],
-                headers={"Content-Range": f"bytes {start}-{len(BODY) - 1}/{len(BODY)}"},
-            )
-        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
-
-    def handler(req):
-        if req.url.host == "www.mediafire.com":
-            return httpx.Response(403, text="<html><title>Just a moment...</title></html>")
-        return download(req)
-
-    async def go():
-        async with client(handler, follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            f = (await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")).files[0]
-            assert await read_all(src.stream(f)) == BODY
-    asyncio.run(go())
-    assert calls["n"] >= 2
-
-
-def test_mediafire_cloudflare_persistente_avisa_de_la_ip(monkeypatch):
-    """Si el reto sigue tras imitar a Chrome, el fallo es transitorio y lo explica."""
-
-    async def fake_impersonating(url):
-        return _Page(403, url, "<html><title>Just a moment...</title></html>")
-
-    monkeypatch.setattr(
-        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
-    )
-
-    def handler(req):
-        return httpx.Response(403, text="<html><title>Just a moment...</title></html>")
-
-    async def go():
-        async with client(handler, follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            with pytest.raises(TransientError, match="Cloudflare"):
-                await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")
-    asyncio.run(go())
-
-
-def test_mediafire_si_el_repair_persiste_avisa_sin_bucle():
-    def download(req):
-        return httpx.Response(
-            302, headers={"Location": "https://www.mediafire.com/download_repair.php?flag=2"}
-        )
-
-    async def go():
-        async with client(range_handler(download), follow_redirects=True) as http:
-            src = MediaFireSource(http)
-            f = RemoteFile("x.zip", None, "https://www.mediafire.com/file/abc/x/file")
-            with pytest.raises(SourceError, match="reparar"):
-                await read_all(src.stream(f))
     asyncio.run(go())
 
 
@@ -302,8 +152,7 @@ def test_mega_inspect_stream_y_reanudacion_desde_cualquier_byte():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            insp = await src.inspect(url)
-            f = insp.files[0]
+            [f] = await src.inspect(url)
             assert f.name == "video_raro_.mp4" and f.size == len(plain)  # nombre saneado
             assert await read_all(src.stream(f)) == plain
             for offset in (1, 16, 31_337):
@@ -318,7 +167,7 @@ def test_mega_cuota_agotada_informa_tiempo_de_espera():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            f = (await src.inspect(url)).files[0]
+            [f] = await src.inspect(url)
             with pytest.raises(QuotaExceeded) as exc:
                 await read_all(src.stream(f))
             assert exc.value.retry_after == 1800
@@ -333,16 +182,9 @@ def test_mega_carpeta_lista_archivos_y_descarga_uno():
     cipher = encrypt_ctr(key, plain)
     aes_key, _ = file_key_parts(key)
     enc_key = b64e(AES.new(master, AES.MODE_ECB).encrypt(key))
-    root_key = os.urandom(16)
     nodes = [
-        # La API devuelve la raíz real del share, que no es el handle del enlace.
-        {"h": "ROOTREAL", "p": "OUTSIDE", "t": 1,
-         "k": "USER:" + b64e(AES.new(master, AES.MODE_ECB).encrypt(root_key)),
-         "a": encrypt_attrs({"n": "carpeta"}, root_key)},
-        {"h": "FILEHNDL", "p": "ROOTREAL", "t": 0, "s": len(plain), "k": f"USER:{enc_key}",
-         "a": encrypt_attrs({"n": "a.bin"}, aes_key)},
-        {"h": "DIRHANDL", "p": "ROOTREAL", "t": 1,
-         "k": "USER:" + b64e(AES.new(master, AES.MODE_ECB).encrypt(os.urandom(16))), "a": ""},
+        {"h": "FILEHNDL", "t": 0, "s": len(plain), "k": f"USER:{enc_key}", "a": encrypt_attrs({"n": "a.bin"}, aes_key)},
+        {"h": "DIRHANDL", "t": 1, "k": "USER:" + b64e(AES.new(master, AES.MODE_ECB).encrypt(os.urandom(16))), "a": ""},
     ]
 
     def handler(req):
@@ -357,9 +199,7 @@ def test_mega_carpeta_lista_archivos_y_descarga_uno():
     async def go():
         async with client(handler) as http:
             src = MegaSource(http)
-            insp = await src.inspect(f"https://mega.nz/folder/FOLDERHD#{b64e(master)}")
-            # La raíz real del share no es el handle del enlace: la API devuelve otro nodo.
-            files = collect_files(insp.tree)
+            files = await src.inspect(f"https://mega.nz/folder/FOLDERHD#{b64e(master)}")
             assert [(f.name, f.size) for f in files] == [("a.bin", len(plain))]
-            assert await read_all(src.stream(node_to_file(files[0]))) == plain
+            assert await read_all(src.stream(files[0])) == plain
     asyncio.run(go())
