@@ -32,6 +32,18 @@ class Runtime:
         self._drive_http = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, read=120.0, write=120.0), follow_redirects=False
         )
+        # MediaFire bloquea las IP de datacenter con Cloudflare. Si el usuario configura
+        # un proxy residencial, solo ese tráfico sale por él; Telegram y Drive no.
+        if settings.mediafire_proxy:
+            self._mediafire_http = httpx.AsyncClient(
+                proxy=settings.mediafire_proxy,
+                timeout=httpx.Timeout(30.0, read=120.0, write=120.0),
+                follow_redirects=True,
+            )
+            self._owns_mediafire_http = True
+        else:
+            self._mediafire_http = self.http
+            self._owns_mediafire_http = False
         self.tokens = TokenStore(
             settings.token_store_path,
             bot_token=settings.bot_token,
@@ -43,7 +55,15 @@ class Runtime:
         self.bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         self.jobs = JobManager(self.bot, settings, self.drive)
         self.dp: Dispatcher = build_dispatcher(
-            Services(settings, self.http, self.drive, self.jobs, runtime=self, oauth=self.oauth)
+            Services(
+                settings,
+                self.http,
+                self._mediafire_http,
+                self.drive,
+                self.jobs,
+                runtime=self,
+                oauth=self.oauth,
+            )
         )
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -125,6 +145,8 @@ class Runtime:
         await self.bot.session.close()
         await self.http.aclose()
         await self._drive_http.aclose()
+        if self._owns_mediafire_http:
+            await self._mediafire_http.aclose()
 
     async def _cleanup_loop(self) -> None:
         max_age = timedelta(hours=self.settings.ttl_hours)

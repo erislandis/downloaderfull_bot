@@ -1,6 +1,17 @@
+import asyncio
 import base64
 
-from app.sources.mediafire import MediaFireSource, parse_direct_url, parse_error, parse_filename
+import httpx
+import pytest
+
+from app.errors import SourceError
+from app.sources.mediafire import (
+    MediaFireSource,
+    _is_cloudflare_challenge,
+    parse_direct_url,
+    parse_error,
+    parse_filename,
+)
 
 DIRECT = "https://download1234.mediafire.com/abc123/key9/Mi%20Archivo.zip"
 
@@ -21,8 +32,43 @@ def test_respaldo_por_regex_si_cambia_el_boton():
     assert parse_direct_url(page) == DIRECT
 
 
+def test_respaldo_protocolo_relativo_y_json():
+    page = '<script>var u = "//download1234.mediafire.com/abc/key/x.zip";</script>'
+    assert parse_direct_url(page) == "https://download1234.mediafire.com/abc/key/x.zip"
+    page = '{"downloadUrl":"https:\\/\\/download99.mediafire.com\\/a\\/b\\/x.zip"}'
+    assert parse_direct_url(page) == "https://download99.mediafire.com/a/b/x.zip"
+
+
+def test_href_blob_se_ignora_y_usa_el_script():
+    page = (
+        '<a id="downloadButton" href="blob:https://www.mediafire.com/xxx">x</a>'
+        f'<script>downloadButton.href = "{DIRECT}";</script>'
+    )
+    assert parse_direct_url(page) == DIRECT
+
+
 def test_sin_enlace():
     assert parse_direct_url("<html>nada</html>") is None
+
+
+def test_detecta_el_reto_de_cloudflare_sin_falsos_positivos():
+    assert _is_cloudflare_challenge("<html><title>Just a moment...</title></html>")
+    assert not _is_cloudflare_challenge(
+        '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>'
+    )
+
+
+def test_cloudflare_se_informa_como_bloqueo_de_ip():
+    def handler(req):
+        return httpx.Response(403, text="<html><title>Just a moment...</title></html>")
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            src = MediaFireSource(http)
+            with pytest.raises(SourceError, match="MEDIAFIRE_PROXY_URL"):
+                await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")
+
+    asyncio.run(go())
 
 
 def test_nombre_desde_html_y_desde_url():

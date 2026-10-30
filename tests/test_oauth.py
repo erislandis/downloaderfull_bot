@@ -45,6 +45,12 @@ def test_settings_valida_chat_de_guardado():
         settings(OAUTH_STORE_CHAT_ID="no-es-un-numero")
 
 
+def test_settings_valida_proxy_de_mediafire():
+    with pytest.raises(RuntimeError, match="MEDIAFIRE_PROXY_URL"):
+        settings(MEDIAFIRE_PROXY_URL="socks5://proxy.local:1080")
+    assert settings(MEDIAFIRE_PROXY_URL="http://proxy.local:8080").mediafire_proxy == "http://proxy.local:8080"
+
+
 def test_token_store_archivo_y_cifrado(tmp_path):
     a = TokenStore(tmp_path / "token.json", bot_token="bot", client_id="id", client_secret="secret")
     assert a.load() is None

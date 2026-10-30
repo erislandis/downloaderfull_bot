@@ -56,6 +56,7 @@ class Pending:
 class Services:
     settings: Settings
     http: httpx.AsyncClient
+    mediafire_http: httpx.AsyncClient
     drive: DriveClient
     jobs: JobManager
     runtime: "Runtime"
@@ -167,7 +168,7 @@ async def _handle_url(message: Message, services: Services, url: str) -> None:
     if not services.drive.has_auth:
         await message.answer("🔐 Google Drive no está conectado. Usa /conectar para autorizarlo desde el navegador.")
         return
-    source = resolve_source(url, services.http)
+    source = resolve_source(url, services.http, mediafire_http=services.mediafire_http)
     if source is None:
         await message.answer("Ese sitio no está soportado. Acepto: " + ", ".join(s.label for s in SOURCES) + ".")
         return

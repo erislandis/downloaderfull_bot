@@ -26,6 +26,7 @@ class Settings:
     ttl_hours: float
     token_store_path: str
     oauth_store_chat_id: int | None
+    mediafire_proxy: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
@@ -46,6 +47,9 @@ class Settings:
         redirect = (env.get("GOOGLE_REDIRECT_URI") or "").strip() or (f"{base}/oauth/callback" if base else None)
         store_chat = (env.get("OAUTH_STORE_CHAT_ID") or "").strip()
         token_path = (env.get("TOKEN_STORE_PATH") or "").strip() or str(_DEFAULT_TOKEN_PATH)
+        proxy = (env.get("MEDIAFIRE_PROXY_URL") or "").strip()
+        if proxy and not proxy.lower().startswith(("http://", "https://")):
+            raise RuntimeError("MEDIAFIRE_PROXY_URL debe ser una URL http:// o https://.")
 
         try:
             store_chat_id = int(store_chat) if store_chat else None
@@ -67,4 +71,5 @@ class Settings:
             ttl_hours=float(env.get("TTL_HOURS", "6")),
             token_store_path=token_path,
             oauth_store_chat_id=store_chat_id,
+            mediafire_proxy=proxy or None,
         )

@@ -78,8 +78,12 @@ Los archivos se borran solos de Drive pasadas `TTL_HOURS` (6 por defecto).
 ## Límites y notas importantes
 
 - **Sin probar contra los sitios reales.** Se desarrolló sin acceso a MediaFire ni a Mega: la lógica está cubierta por
-  45 pruebas con servidores simulados, pero la primera prueba real puede revelar ajustes. El extractor de MediaFire
+  50 pruebas con servidores simulados, pero la primera prueba real puede revelar ajustes. El extractor de MediaFire
   depende del HTML de su página, que puede cambiar (está aislado en `parse_direct_url`, con test).
+- **MediaFire y Cloudflare:** MediaFire suele bloquear las IP de datacenter de Render con una verificación de
+  Cloudflare. El bot detecta ese caso y lo indica; no es un fallo del enlace. Soluciones: usa Mega/Drive o un enlace
+  directo, ejecuta el bot en una IP residencial, o define `MEDIAFIRE_PROXY_URL` con un proxy HTTP/HTTPS residencial
+  (solo el tráfico de MediaFire pasa por él). Sin cambiar de IP no hay forma fiable de saltarse ese bloqueo.
 - **Mega:** se descifra en Python (AES-CTR). No se verifica el MAC del archivo. Su cuota de transferencia gratuita es
   limitada y depende de la IP; si se agota, el bot informa del tiempo de espera cuando Mega lo indica.
 - **Render gratis:** se duerme tras 15 min sin tráfico (el primer mensaje tarda hasta ~1 min en responder). Durante una
