@@ -1,0 +1,15 @@
+Python 3.14.8
+
+$ pytest -q tests/test_config.py tests/test_archive.py tests/test_folders.py tests/test_direct_gdrive.py tests/test_mediafire.py tests/test_mega.py tests/test_http_flows.py
+........................................................................ [ 43%]
+........................................................................ [ 87%]
+....................                                                     [100%]
+164 passed in 5.32s
+
+$ python -c "import aiogram"
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import aiogram
+ModuleNotFoundError: No module named 'aiogram'
+
+Nota: la suite completa no se ejecuta porque aiogram no está instalado en el entorno local; no se instalaron dependencias.

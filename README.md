@@ -1,100 +1,304 @@
 # BridgeBot
 
-Bot de Telegram que recibe un enlace de **MediaFire** o **Mega**, lo transfiere a tu **Google Drive** por streaming
-y te devuelve un enlace directo de Drive para pegarlo en tu bot de descargas.
+Bot de Telegram que recibe un enlace de **MediaFire**, **Mega**, **Google Drive** o cualquier
+**enlace de descarga directa** y sube el archivo **directamente a Telegram**, devolviéndotelo como un documento (un solo archivo, hasta 2 GB).
 
 ```
-Enlace MediaFire/Mega → BridgeBot (Render) → tu Drive → enlace directo → tu bot de descargas → tu app
+Enlace MediaFire/Mega/Drive/directo → BridgeBot (Render) → Telegram → tu chat
 ```
 
-El archivo **nunca se guarda completo** en Render: pasa en bloques de 8 MiB (RAM baja), con reintentos y reanudación.
+El archivo **casi nunca se guarda en disco**: se descarga y se sube en bloques con memoria constante
+(apto para el plan gratuito de Render). Solo los ZIP que no caben en la Bot API (>50 MB) se
+comprimen antes en un fichero temporal, porque MTProto necesita conocer el tamaño final y leer
+de un fichero real. El código vive en GitHub; Render solo lo ejecuta.
+
+## Cómo reparte las subidas
+
+| Tamaño del archivo | Ruta | Límite |
+|---|---|---|
+| ≤ 50 MB | La sube el propio bot por la Bot API | 50 MB (tope de Telegram) |
+| > 50 MB | La sube una **cuenta de usuario** por MTProto y el bot la **copia** al chat del usuario | 2 GB |
+
+La Bot API de Telegram solo admite 50 MB por documento. Para archivos grandes se usa una cuenta
+de usuario (Teléfono/Telegram) que sube el documento al chat privado del bot y este lo **copia**
+al usuario: copiar no vuelve a subir el archivo, así se esquiva el límite de 50 MB.
+
+### El puente de identificadores (por qué copiar y no reenviar)
+
+La Bot API numera los mensajes **de cada chat** desde 1; MTProto usa el contador global del peer.
+Los dos identificadores del mismo mensaje **no coinciden** (el de la Bot API es mucho más pequeño),
+así que reenviar con el id que devuelve Telethon falla con
+`Bad Request: message to forward not found`.
+
+Para obtener el id que sí entiende la Bot API, la subida se publica en el chat del bot con un
+**token en el pie de foto** (`bridge:<uuid>`). Telegram entrega ese documento al bot como un update
+normal: su `message_id` **es** el de la Bot API, y es el único sitio donde aparece. El bot resuelve
+el token (`app/bot.py`) y la subida espera ese dato (`app/uploader.py`) para hacer el `copyMessage`
+con el pie de foto limpio. Si el bot no recibe el documento, la subida avisa en vez de fallar en
+silencio.
+
+### Por qué la subida es rápida (plan gratuito)
+
+Telethon sube los archivos **trozo a trozo esperando la respuesta de Telegram** antes de enviar el
+siguiente: en un archivo grande eso son miles de ida y vuelta y lo que limita no es el ancho de banda
+sino la latencia. BridgeBot usa `app/mtproto_upload.py`, que lanza varios trozos de 512 KB **en
+paralelo** (6 por defecto, `MT_UPLOAD_PARALLEL`) y reutiliza el `InputFileBig` resultante, así que
+`send_file()` solo publica el documento y no lo vuelve a subir.
+
+Además:
+
+- **`cryptg` es imprescindible en el plan gratuito.** Telethon cifra cada trozo con AES-IGE; sin
+  `cryptg` lo hace con libssl/Python, a ~6 MB/s *por núcleo completo* (medido: 84 ms por trozo de
+  512 KB). Con `cryptg` son ~0,9 ms. En 0,1 CPU la diferencia es la que hay entre un tope de
+  ~0,6 MB/s y uno de decenas de MB/s, y el paralelismo de arriba no ayuda si la CPU es el cuello de
+  botella. Está en `requirements.txt`; al arrancar, el log dice `cryptg activo` (o avisa si falta).
+- La descarga se **reanuda** desde el byte exacto si la CDN corta la conexión (Mega permite descifrar
+  desde cualquier bloque), sin volver a empezar el archivo.
+- Los ZIP se comprimen con `ZIP_LEVEL=1` por defecto: en 0,1 CPU, bajar de nivel 6 a 1 multiplica la
+  velocidad y apenas cambia el tamaño de vídeos o imágenes. Con `ZIP_LEVEL=0` se empaqueta sin comprimir.
+- El buffer del puente descarga/subida es de 16 MB (`BUFFER_MB`): menos bloqueos y más margen para la red.
 
 ## Estructura
 
 | Ruta | Función |
 |---|---|
-| `app/sources/` | Un módulo por sitio (`mediafire.py`, `mega.py`) con la misma interfaz `Source` |
-| `app/transfer.py` | Puente origen → Drive: bloques, reintentos, reanudación |
-| `app/drive.py` | Cliente de Drive: subida reanudable, permisos, cuota, limpieza |
-| `app/oauth.py` | Autorización OAuth desde el navegador (`/conectar`) |
-| `app/token_store.py` | Guardado local y cifrado del refresh token |
-| `app/jobs.py` | Cola (una transferencia a la vez) y mensajes de progreso |
-| `app/bot.py` | Comandos y botones de Telegram |
-| `app/main.py` | Webhook FastAPI para Render (`/webhook`, `/oauth`, `/healthz`) |
+| `app/sources/` | Un módulo por sitio (`mediafire.py`, `mega.py`, `gdrive.py`, `direct.py`) con la interfaz `Source` |
+| `app/sources/direct.py` | Enlaces de descarga directa (cualquier http/https): nombre, tamaño, reanudación |
+| `app/sources/gdrive.py` | Google Drive: archivos, documentos nativos (docx/xlsx/pptx) y carpetas (con `GOOGLE_API_KEY`) |
+| `app/sources/_guard.py` | Cliente HTTP con protección SSRF para los orígenes con URLs arbitrarias |
+| `app/sources/base.py` | Modelo común: `RemoteFile`, `BundleFile`, `FolderNode`, `Inspection` y utilidades del árbol |
+| `app/sources/archive.py` | Generador de ZIP en streaming (deflate + data descriptor), sin cargar el ZIP en memoria |
+| `app/folders.py` | Navegador de carpetas: árbol en memoria con TTL y botones (Telegram limita `callback_data` a 64 B) |
+| `app/streams.py` | Puente sync/async: cola acotada que alimenta la subida MTProto sin cargar el archivo en RAM |
+| `app/mtproto_upload.py` | Subida MTProto con varios trozos (512 KB) en vuelo a la vez |
+| `app/uploader.py` | Entrega híbrida: Bot API (≤50 MB) o MTProto + copia (>50 MB), con reanudación de la descarga y puente de identificadores |
+| `app/jobs.py` | Cola (un archivo a la vez), pausa, reintentos, estadísticas y mensajes de progreso |
+| `app/admin.py` | Permisos de administración, bloqueos (`BanRegistry`) e informes |
+| `app/runtime.py` | Ensamblado de dependencias, menú de comandos, registro en memoria y reinicio |
+| `app/bot.py` | Comandos y handlers de Telegram (públicos + comandos de administración) |
+| `app/main.py` | Webhook FastAPI para Render (`/webhook`, `/healthz`) más página de estado `/` y API `/api/status` |
+
+### Carpetas de Mega y ZIP
+
+Un enlace de carpeta de Mega (o un enlace profundo `.../folder/<id>` / `.../file/<id>`) abre un
+**listado navegable**: subcarpetas y archivos con botones, paginado. Desde ahí se puede:
+
+- **⬇️ Descargar** un archivo suelto tal cual.
+- **🗜 Comprimir en ZIP** la carpeta actual (con sus subcarpetas) o un único archivo, y subirlo como
+  un solo documento. El ZIP se genera en streaming, así que comprimir 10 GB no ocupa 10 GB de RAM.
+
+| Contenido | Cómo se sube |
+|---|---|
+| Archivo suelto ≤ 50 MB | Bot API (en RAM) |
+| Archivo suelto > 50 MB | MTProto + copia (en RAM, en bloques) |
+| ZIP ≤ 50 MB | Bot API (en RAM) |
+| ZIP > 50 MB | Se comprime en un fichero temporal y se sube por MTProto + copia |
+
+El ZIP conserva la estructura de carpetas dentro del archivo (la raíz del ZIP es la carpeta elegida).
+Si el servidor no tiene espacio libre suficiente, el bot lo dice antes de empezar.
+
+### Enlaces directos y Google Drive
+
+**Enlace directo:** cualquier URL `http(s)` que empiece a descargar al abrirla. El bot averigua
+nombre y tamaño sin bajar el archivo, rechaza las páginas web con un mensaje claro y reanuda si el
+servidor admite `Range`. Si el servidor no declara el tamaño, el archivo pasa por disco (con tope de
+`MAX_FILE_MB`) antes de subirse.
+
+Si lo que responde el servidor es una página web, el bot lo detecta por el tipo de contenido **y**
+por el principio del cuerpo (hay servidores que envían la web como si fuera un binario), dice cuál
+es el título de esa página y, si parece un bloqueo (403, *captcha*, *access denied*…), avisa de que
+el servidor está rechazando las descargas desde la nube. Cuando la respuesta con `Range` es una web
+pero sin `Range` llega el archivo, se reintenta sin esa cabecera.
+
+**Google Drive:** el archivo (o carpeta) debe estar compartido como *«Cualquier persona con el
+enlace»*. Formatos admitidos: `/file/d/<id>`, `open?id=`, `uc?id=`, `drive.usercontent…/download?id=`,
+carpetas `/drive/folders/<id>`, cuentas de Workspace (`/a/<dominio>/file/d/<id>`) y documentos de
+Google (`docs.google.com/document|spreadsheets|presentation`, que se exportan a docx / xlsx / pptx).
+
+| | Sin `GOOGLE_API_KEY` | Con `GOOGLE_API_KEY` |
+|---|---|---|
+| Archivo suelto | Sí (salta el aviso de virus de los archivos grandes) | Sí, por la API v3 (más fiable) |
+| Carpetas (navegar, ZIP) | No | Sí |
+| Documentos de Google | Sí | Sí |
+
+La ruta sin clave lee páginas de Drive que no son una API: Google puede cambiarlas y, desde IPs de
+centros de datos como las de Render, a veces limita archivos muy populares. La clave es gratuita:
+Google Cloud Console → *APIs y servicios* → habilitar **Google Drive API** → *Credenciales* →
+*Crear clave de API* (restríngela a «Google Drive API») → pégala en `GOOGLE_API_KEY` en Render.
+Drive limita las descargas diarias de un mismo archivo público; el bot lo avisa con un mensaje
+específico.
+
+### Página de estado y API
+
+Render exige que el servicio sirva tráfico web, así que el bot expone:
+
+- `GET /` — página web con el estado del bot (en línea, @usuario, tiempo en funcionamiento, cola, sitios soportados).
+- `GET /api/status` — lo mismo en JSON, por ejemplo:
+
+  ```json
+  {"ok": true, "status": "online", "bot": "tu_bot", "uptime_seconds": 3600,
+   "queue": {"pending_jobs": 0, "current_file": null, "paused": false},
+   "sources": ["MediaFire", "Mega"], "max_file_mb": 2048,
+   "mtproto": {"ok": true, "error": ""}}
+  ```
+
+- `GET /healthz` — sonda de vida para Render (`healthCheckPath`).
+
+Si la sesión MTProto está mal generada, el bot **arranca igual** (sigue subiendo archivos de hasta
+50 MB por la Bot API) y la página de estado lo indica con un aviso ⚠.
 
 ## Puesta en marcha
 
 ### 1. Bot de Telegram
-Crea el bot con **@BotFather** (`/newbot`) y guarda el token → `BOT_TOKEN`.
+Crea el bot con **@BotFather** (`/newbot`) y guarda el token → `BOT_TOKEN`. El bot necesita tener
+un **@username** (el que le da BotFather).
 
-### 2. Google Drive (una sola vez)
-1. En [Google Cloud Console](https://console.cloud.google.com/) crea un proyecto y habilita **Google Drive API**.
-2. *APIs y servicios → Pantalla de consentimiento OAuth*: tipo **Externo**. Luego pulsa **Publicar aplicación** (estado
-   *In production*). Si la dejas en *Testing*, el refresh token **caduca a los 7 días**.
-3. *Credenciales → Crear credenciales → ID de cliente OAuth → **Aplicación web***. Copia el ID y el secreto.
-4. Añade como **URI de redirección autorizada** la URL de tu servicio en Render:
+### 2. Cuenta de Telegram para las subidas grandes
+1. Entra en https://my.telegram.org → *API development tools* y crea una app.
+   Guarda `api_id` y `api_hash` → `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`.
+2. Con esa cuenta, **abre el chat del bot y pulsa Start** (para que la cuenta pueda escribirle).
+3. Pon `TELEGRAM_API_ID` y `TELEGRAM_API_HASH` en tu `.env` y genera la sesión (una sola vez):
+   ```powershell
+   pip install -r requirements.txt
+   python scripts/get_session.py
    ```
-   https://TU-SERVICIO.onrender.com/oauth/callback
-   ```
-   Para probar en local añade también `http://localhost:8000/oauth/callback`.
-5. En Render define solo `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET`. **No hace falta crear ni copiar
-   `GOOGLE_REFRESH_TOKEN`**: el bot lo obtiene al pulsar `/conectar` (el permiso es `drive.file`, así que solo ve lo
-   que él mismo crea).
+   Autoriza con teléfono/código/2FA. El script **guarda solo** el `TELEGRAM_SESSION` en el `.env`.
+
+> Esta cuenta es la que sube los archivos >50 MB. Úsala poco para no arriesgarte a limitaciones.
+
+Para que `/reiniciar` reinicie de verdad en Render, crea un *Deploy Hook* (Settings → Deploy Hook)
+y pégalo en `RENDER_DEPLOY_HOOK_URL`. Sin él, el bot termina su proceso y Render lo vuelve a
+levantar automáticamente (es igual de efectivo, pero menos elegante).
 
 ### 3. Render
-1. Sube este proyecto a un repositorio de GitHub (el `.env` está en `.gitignore`).
-2. En Render: **New → Blueprint** y elige el repositorio (usa `render.yaml`), o crea un *Web Service* con
-   build `pip install -r requirements.txt` y start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-3. Define las variables: `BOT_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `ALLOWED_USER_IDS`.
-   `WEBHOOK_SECRET` lo genera el blueprint; `RENDER_EXTERNAL_URL` lo pone Render automáticamente.
-4. Escribe al bot: si no estás autorizado te mostrará tu **ID de Telegram**; añádelo a `ALLOWED_USER_IDS` y redeploya.
-5. Envía `/conectar` al bot y abre el enlace en el navegador. Al autorizar, el token queda guardado **cifrado** en un
-   mensaje fijado del chat y en `.state/google-token.json`; ya no hay que tocar variables de entorno. En Render el disco
-   es efímero, por eso el mensaje fijado de Telegram es lo que permite reconectar tras un reinicio.
-   Si ya tenías `GOOGLE_REFRESH_TOKEN` en Render, bórrala para que se use el token del navegador.
-
-> Si `ALLOWED_USER_IDS` tiene varios IDs, el token se guarda en el primero. Puedes elegir otro chat con
-> `OAUTH_STORE_CHAT_ID`. El token solo se puede descifrar con el `BOT_TOKEN` y el cliente OAuth actuales.
+1. Sube el proyecto a GitHub (el `.env` está en `.gitignore`).
+2. En Render: **New → Blueprint** y elige el repositorio (usa `render.yaml`), o crea un *Web Service*
+   con build `pip install -r requirements.txt` y start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+3. Define las variables: `BOT_TOKEN`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION`,
+   `ADMIN_USER_IDS`. `WEBHOOK_SECRET` lo genera el blueprint; `RENDER_EXTERNAL_URL` lo pone Render.
+   Opcionales: `MT_UPLOAD_PARALLEL` (trozos en paralelo, 6 por defecto), `ZIP_LEVEL` (0–9, 1 por
+   defecto), `GOOGLE_API_KEY` (carpetas de Drive), `BUFFER_MB` (16 por defecto) y `RENDER_DEPLOY_HOOK_URL` (para que `/reiniciar` haga un
+   redeploy limpio; se obtiene en *Settings → Deploy Hook* del servicio en Render).
+4. El bot lo puede usar cualquiera; escribe al bot para ver tu **ID de Telegram** y añádelo a
+   `ADMIN_USER_IDS` si quieres poder usar los comandos de administración. Después, redeploya.
 
 ### Prueba local (sin webhook)
-```bash
-cp .env.example .env   # rellena BOT_TOKEN, GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET
-set -a; . ./.env; set +a
-python -m app.polling
-```
-El flujo `/conectar` necesita la URL pública del servicio web. Para probarlo en local, ejecuta
-`uvicorn app.main:app --port 8000`, define `WEBHOOK_BASE_URL=http://localhost:8000` y abre el enlace de `/conectar`. Si
-prefieres el método antiguo, `scripts/get_refresh_token.py` sigue siendo compatible con un `GOOGLE_REFRESH_TOKEN`
-opcional en el entorno.
+1. Crea tu `.env` a partir del ejemplo y rellénalo:
+   ```powershell
+   Copy-Item .env.example .env
+   # edita .env con BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION
+   ```
+2. **Sitúate en la carpeta `bot/`** (donde está `run.py`) y arranca:
+   ```powershell
+   pip install -r requirements.txt
+   python run.py
+   ```
+   Equivale a `python -m app.polling`. No ejecutes `python app\polling.py` como archivo suelto
+   desde dentro de `app\`, ni `python main.py`: eso es solo para Render.
+
+El `.env` se carga automáticamente (gracias a `python-dotenv`); en Render manda el panel de
+variables de entorno, que tiene prioridad sobre cualquier `.env`.
 
 ## Uso
-Envía un enlace. Para archivos sueltos arranca solo; para carpetas de Mega muestra la lista y un botón de confirmación.
-Recibirás un mensaje de progreso y, al terminar, el enlace en un mensaje aparte (toca para copiarlo).
+Envía un enlace de archivo suelto. El bot te avisa del progreso y, al terminar, tendrás el archivo
+como documento en el propio chat.
 
-`/conectar` · `/desconectar` · `/cancelar` · `/limpiar` (borra todo lo del bot en Drive) · `/espacio`
+Si envías el enlace de una **carpeta de Mega**, el bot abre el listado de su contenido para que
+elijas: un archivo concreto, un archivo comprimido en ZIP o toda la carpeta en un ZIP.
 
-Los archivos se borran solos de Drive pasadas `TTL_HOURS` (6 por defecto).
+Al pulsar **Start** (o `/ayuda`), cada usuario ve lo que puede hacer: los administradores
+reciben además el panel de estado y la lista completa de comandos de administración.
+
+/ayuda (o /help) · /estado · /cancelar
+
+### Comandos de administración
+Solo los responde el bot a los **administradores** (los ID de Telegram de `ADMIN_USER_IDS`).
+Para el resto de usuarios, esos comandos no existen y el bot se comporta con normalidad:
+
+| Comando | Qué hace |
+| --- | --- |
+| `/admin` | Panel: estado del bot, cola, usuarios y cuota. |
+| `/reiniciar` (o `/restart`) | Reinicia el servicio tras confirmar. Usa el *deploy hook* de Render si está configurado; si no, termina el proceso y Render lo relanza. |
+| `/version` | Versión, Python, sistema, tiempo en marcha y estado de MTProto. |
+| `/ping` | Comprueba que el bot responde y mide la latencia de la Bot API. |
+| `/stats` | Envíos ok/fallidos, bytes, velocidad media, memoria, disco, pausa y paralelismo. |
+| `/logs [n]` | Últimas líneas del registro en memoria (1–100; por defecto 20). |
+| `/test_mtproto` | Comprueba (y reconecta) la sesión de las subidas grandes. |
+| `/cola` | Lista las transferencias en curso y en espera. |
+| `/usuarios` | Usuarios que han usado el bot y sus transferencias. |
+| `/pausar` · `/reanudar` | Detiene o reanuda la cola (el trabajo en curso termina). |
+| `/cancelar_todo` | Cancela todos los trabajos en cola. |
+| `/cancelar_usuario <id>` | Cancela las transferencias de un usuario. |
+| `/limpiar [horas]` | Borra del almacén del bot los archivos ya subidos (todos, o los más antiguos que `horas`). |
+| `/broadcast <texto>` | Envía un mensaje a todos los usuarios que han usado el bot. |
+| `/permitir <id>` · `/revocar <id>` · `/admins` | Gestionan y listan los administradores (en memoria: se pierden al reiniciar). |
+| `/ban <id> [motivo]` · `/unban <id>` · `/baneados` | Bloquean, desbloquean y listan usuarios (en memoria). Un usuario bloqueado no puede usar el bot. |
+
+Para que un permiso sea permanente hay que añadir el ID a `ADMIN_USER_IDS` y reiniciar el servicio.
+
+**Si el bot no te reconoce como administrador:**
+1. Envía `/start`: el bot te dice tu ID numérico. Debe ser ese número, no tu `@usuario`.
+2. En Render → **Environment**, comprueba que está en `ADMIN_USER_IDS` (separados por comas si hay varios).
+3. Tras cambiar la variable, haz **Manual Deploy → Deploy latest commit** (o reinicia el servicio).
+4. `GET /api/status` muestra `"admins"`: si vale `0`, la variable no llegó al proceso. Los logs del
+   arranque también indican los administradores configurados o avisan de que la lista está vacía.
+
+### Si te desconectas (puedes cerrar Telegram)
+
+La descarga y la subida ocurren **en el servidor**, no en tu conexión: puedes cerrar Telegram o
+apagar el móvil y, cuando vuelvas, el archivo te estará esperando en el chat.
+
+- El enlace se analiza y el trabajo entra en la cola del servidor (la respuesta a Telegram es
+  inmediata, así que no hay timeouts).
+- Telegram guarda los mensajes mientras no estás conectado y te los entrega al volver.
+- `/estado` te dice qué transfers hay en marcha o qué se entregó ya.
+- Mientras haya trabajos, el bot se hace pings a sí mismo para que Render no lo duerma.
+- Lo único que **interrumpe** una transferencia es un **reinicio del servicio** (un deploy): el
+  trabajo se pierde y hay que reenviar el enlace.
+
+Los archivos que pasan por la cuenta de usuario se borran de su chat con el bot pasadas `TTL_HOURS`
+(6 por defecto); la copia que recibes tú permanece.
 
 ## Límites y notas importantes
 
-- **Sin probar contra los sitios reales.** Se desarrolló sin acceso a MediaFire ni a Mega: la lógica está cubierta por
-  50 pruebas con servidores simulados, pero la primera prueba real puede revelar ajustes. El extractor de MediaFire
-  depende del HTML de su página, que puede cambiar (está aislado en `parse_direct_url`, con test).
-- **MediaFire y Cloudflare:** MediaFire suele bloquear las IP de datacenter de Render con una verificación de
-  Cloudflare. El bot detecta ese caso y lo indica; no es un fallo del enlace. Soluciones: usa Mega/Drive o un enlace
-  directo, ejecuta el bot en una IP residencial, o define `MEDIAFIRE_PROXY_URL` con un proxy HTTP/HTTPS residencial
-  (solo el tráfico de MediaFire pasa por él). Sin cambiar de IP no hay forma fiable de saltarse ese bloqueo.
-- **Mega:** se descifra en Python (AES-CTR). No se verifica el MAC del archivo. Su cuota de transferencia gratuita es
-  limitada y depende de la IP; si se agota, el bot informa del tiempo de espera cuando Mega lo indica.
-- **Render gratis:** se duerme tras 15 min sin tráfico (el primer mensaje tarda hasta ~1 min en responder). Durante una
-  transferencia el bot se hace pings a `/healthz` para evitarlo, pero no es una garantía.
-- **Drive:** 15 GB gratis. Los archivos de más de ~100 MB muestran una página de aviso de antivirus en el enlace
-  `uc?export=download`; depende de que tu bot de descargas la gestione.
-- **Seguridad:** los enlaces son públicos (cualquiera con el enlace) mientras el archivo exista; por eso el TTL corto y
-  la lista `ALLOWED_USER_IDS`, que evita que otros usen tu cuota y tu Drive. Nunca subas el `.env` ni `.state/`.
-- **Token de Google:** `/conectar` evita guardar el refresh token en Render. Queda cifrado en un mensaje fijado del chat
-  (bórralo con `/desconectar`) y en `.state/google-token.json`; si cambias `BOT_TOKEN` o el cliente OAuth, vuelve a
-  conectar. `GOOGLE_REFRESH_TOKEN` sigue aceptándose como respaldo, pero ya no es obligatorio.
+- **Máximo 2 GB por archivo** (tope de MTProto; con Telegram Premium sería 4 GB). Se corta antes de empezar.
+  El límite se aplica a cada archivo y también al tamaño total de un ZIP.
+- **Carpetas:** las de Mega (y las de Google Drive, con `GOOGLE_API_KEY`) se listan con botones para
+  navegar y elegir archivo, ZIP de archivo o ZIP de la carpeta; MediaFire solo acepta archivos sueltos.
+  Una carpeta de Drive admite hasta 2000 elementos y 8 niveles.
+- **Reintentos automáticos:** los fallos transitorios (red, 5xx, límite de peticiones de MediaFire/Mega)
+  se reintentan hasta 3 veces con espera creciente antes de dar por perdido el archivo.
+- **Memoria constante:** el contenido se descarga y se sube en streaming (unos pocos MB), pensado para el
+  plan gratuito de Render (512 MB). La excepción es el ZIP >50 MB, que se escribe en un fichero temporal
+  del disco efímero de Render y se borra al terminar.
+- **El archivo sí atraviesa Render** (RAM y red) porque ahí corre el bot; lo que no se hace es almacenarlo
+  (salvo el ZIP grande, que es temporal).
+- **Render gratis:** se duerme a los 15 min sin tráfico (el primer mensaje puede tardar ~1 min). Durante
+  una transferencia el bot se hace pings a `/healthz`, pero un deploy reinicia el servicio y aborta la subida.
+- **MediaFire:** la página del archivo está protegida por Cloudflare. El bot usa `curl-cffi`
+  (fingerprint de Chrome) cuando `httpx` recibe el reto «Just a moment…», probando varios perfiles
+  con espera creciente y volviendo a resolver el enlace directo en cada intento. Aun así, Cloudflare
+  también decide por **reputación de IP**: en las IPs compartidas de Render el reto suele persistir
+  aunque el fingerprint sea correcto. Tras agotar los reintentos el bot lo dice claramente; en ese
+  caso hay que usar otro mirror (Mega, Drive o enlace directo) o desplegar el bot tras una IP no
+  bloqueada (proxy residencial). Los enlaces `downloadNNN.mediafire.com/…` caducan y están ligados
+  a la IP que abrió la página, así que no se reutilizan.
+- **Mega:** su cuota de transferencia gratuita depende de la IP; las IPs de datacenter (como Render) se
+  agotan pronto. El bot informa del tiempo de espera cuando Mega lo indica. Además, las carpetas de Mega
+  se montan encriptadas con la clave del enlace: si la clave no es correcta, el bot lo avisa.
+- **GitHub solo aloja el código**, no los archivos (límite de 100 MB por archivo).
+- **Arranque:** el servidor web abre el puerto antes de cargar Telethon (que es pesado) para que
+  Render no tarde en detectarlo. Si al arrancar no se puede registrar el webhook en Telegram
+  (la red del plan gratuito se cae a menudo), el servicio **no se cae**: lo reintenta cada
+  minuto durante media hora.
+- **Seguridad (enlaces directos):** el bot descarga URLs que escribe cualquiera, así que bloquea los
+  destinos que no resuelven solo a direcciones públicas (`localhost`, redes privadas, metadatos de la
+  nube `169.254.169.254`, multicast, NAT64…), también en cada redirección, y limita las redirecciones a 5.
+  Límite conocido: la comprobación DNS y la conexión son dos consultas distintas (*DNS rebinding*).
+  Además, un servidor que envíe más datos de los declarados se corta (tope de RAM y de disco).
+- **Seguridad:** el bot es público, así que cada usuario puede mandar como mucho 3 transferencias
+  en cola a la vez y los comandos de administración (`ADMIN_USER_IDS`) están restringidos al
+  administrador; nunca subas el `.env`.
 
 ## Tests
 ```bash
@@ -102,5 +306,5 @@ pip install -r requirements-dev.txt && pytest
 ```
 
 ## Añadir otro sitio
-Crea `app/sources/<sitio>.py` con una clase que herede de `Source` (`matches`, `inspect`, `stream`) y regístrala en
-`app/sources/__init__.py`. El resto (Drive, reintentos, cola, bot) no cambia.
+Crea `app/sources/<sitio>.py` con una clase que herede de `Source` (`matches`, `inspect`, `stream`) y
+regístrala en `app/sources/__init__.py`. El resto (subida, cola, bot) no cambia.

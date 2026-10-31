@@ -8,16 +8,22 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12.8
+        value: 3.14.8
       - key: WEBHOOK_SECRET
         generateValue: true
       - key: BOT_TOKEN
         sync: false
-      - key: ALLOWED_USER_IDS
+      - key: ADMIN_USER_IDS
         sync: false
-      - key: GOOGLE_CLIENT_ID
+      - key: TELEGRAM_API_ID
         sync: false
-      - key: GOOGLE_CLIENT_SECRET
+      - key: TELEGRAM_API_HASH
         sync: false
-      # El refresh token se obtiene con /conectar y se guarda cifrado en Telegram.
-      # Si MediaFire bloquea la IP de Render, define MEDIAFIRE_PROXY_URL en el panel.
+      - key: TELEGRAM_SESSION
+        sync: false
+      - key: GOOGLE_API_KEY  # opcional: activa las carpetas de Google Drive
+        sync: false
+      - key: MT_UPLOAD_PARALLEL
+        value: "6"
+      - key: ZIP_LEVEL
+        value: "1"
