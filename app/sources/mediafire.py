@@ -4,15 +4,24 @@ import asyncio
 import base64
 import html as htmllib
 import re
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import (
+    parse_qs,
+    parse_qsl,
+    unquote,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
+)
 
 import httpx
 
 from ..errors import ResumeNotSupported, SourceError, TransientError
 from ..utils import safe_filename
-from .base import Inspection, RemoteFile, Source
+from .base import Inspection, RemoteFile, Source, SourceOptions
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -78,6 +87,10 @@ _API_ENDPOINT = "https://www.mediafire.com/api/1.4/file/get_info.php"
 _DEFERRED_RETRIES = 4
 _DEFERRED_MAX_WAIT = 10.0
 _STREAM_ATTEMPTS = 2
+# El enlace directo recién obtenido sirve para empezar la descarga sin pedir la
+# página otra vez. Es efímero y está ligado a la IP, así que se guarda poco tiempo.
+_FRESH_LINK_TTL = 300.0
+_FRESH_LINK_MAX = 128
 # Cloudflare bloquea por reputación de IP, no solo por fingerprint TLS. En las IPs
 # compartidas de Render el reto suele persistir: se prueban varios perfiles de Chrome
 # con espera creciente y, si aun así no cede, se avisa de que no es culpa del enlace.
@@ -240,7 +253,7 @@ def quickkey(url: str) -> str | None:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
     parts = [part for part in parsed.path.split("/") if part]
-    if len(parts) >= 2 and parts[0].lower() in ("file", "file_premium"):
+    if len(parts) >= 2 and parts[0].lower() in ("file", "file_premium", "download"):
         return parts[1]
     # Enlaces directos: /<dkey>/<quickkey>/<archivo>
     if host.startswith("download") and host.endswith("mediafire.com"):
@@ -268,6 +281,49 @@ def canonical_page(url: str) -> str:
     if key:
         return f"https://www.mediafire.com/file/{key}/file"
     return url
+
+
+def page_candidates(url: str) -> list[str]:
+    """Rutas públicas que pueden servir la página del archivo.
+
+    La primera es la página exacta recibida (sin ``dkey`` ni ``r``), porque es la
+    que el usuario abrió y puede tener una caché distinta. Después se prueban la
+    canónica y varias rutas antiguas de MediaFire antes de rendirse ante Cloudflare.
+    """
+    key = quickkey(url)
+    if not key:
+        return [url]
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    candidates: list[str] = []
+    if host in ("mediafire.com", "www.mediafire.com") and parsed.path.lower().startswith(
+        ("/file/", "/file_premium/")
+    ):
+        query = [
+            (name, value)
+            for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if name.lower() not in ("dkey", "r")
+        ]
+        exact = urlunparse(
+            ("https", "www.mediafire.com", parsed.path, "", urlencode(query), "")
+        )
+        candidates.append(exact)
+        plain = urlunparse(("https", "www.mediafire.com", parsed.path, "", "", ""))
+        if plain != exact:
+            candidates.append(plain)
+    candidates.extend(
+        [
+            canonical_page(url),
+            f"https://www.mediafire.com/download/{key}",
+            f"https://www.mediafire.com/file/{key}/file?action=download",
+            f"https://www.mediafire.com/?{key}",
+        ]
+    )
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
 
 
 def _page_title(page: str) -> str:
@@ -301,6 +357,12 @@ class _RepairRequired(Exception):
 class MediaFireSource(Source):
     key = "mediafire"
     label = "MediaFire"
+
+    def __init__(
+        self, http: httpx.AsyncClient, zip_level: int = 1, options: SourceOptions | None = None
+    ) -> None:
+        super().__init__(http, zip_level, options)
+        self._fresh_links: dict[str, tuple[float, str, dict[str, str]]] = {}
 
     @classmethod
     def matches(cls, url: str) -> bool:
@@ -345,16 +407,52 @@ class MediaFireSource(Source):
             return None
         return (str(name), size) if name else None
 
+    def _remember_link(self, url: str, direct: str, post_data: dict[str, str]) -> None:
+        key = quickkey(url)
+        if not key:
+            return
+        if len(self._fresh_links) >= _FRESH_LINK_MAX:
+            self._fresh_links.pop(next(iter(self._fresh_links)))
+        self._fresh_links[key] = (time.monotonic() + _FRESH_LINK_TTL, direct, dict(post_data))
+
+    def _fresh_link(self, url: str) -> tuple[str, dict[str, str]] | None:
+        key = quickkey(url)
+        if not key:
+            return None
+        item = self._fresh_links.get(key)
+        if item is None:
+            return None
+        expires, direct, post_data = item
+        if expires <= time.monotonic():
+            self._fresh_links.pop(key, None)
+            return None
+        return direct, post_data
+
+    def _forget_link(self, url: str) -> None:
+        key = quickkey(url)
+        if key:
+            self._fresh_links.pop(key, None)
+
     async def stream(self, file: RemoteFile, offset: int = 0) -> AsyncIterator[bytes]:
-        # Se vuelve a resolver en cada intento: los enlaces directos caducan y están
-        # ligados a la IP que abrió la página, así que nunca se reutilizan.
+        # ``inspect`` acaba de obtener un enlace directo: úsalo antes de pedir otra
+        # vez la página. Si caduca, se olvida y se resuelve una página nueva.
         for attempt in range(_STREAM_ATTEMPTS):
-            direct, _, _, post_data = await self._resolve(file.ref)
+            cached = self._fresh_link(file.ref)
+            if cached is not None:
+                direct, post_data = cached
+                try:
+                    async for chunk in self._stream_direct(direct, post_data, offset):
+                        yield chunk
+                    return
+                except (_RepairRequired, SourceError):
+                    self._forget_link(file.ref)
+            direct, _, final_url, post_data = await self._resolve(file.ref)
             try:
                 async for chunk in self._stream_direct(direct, post_data, offset):
                     yield chunk
                 return
             except _RepairRequired:
+                self._forget_link(final_url)
                 if attempt + 1 >= _STREAM_ATTEMPTS:
                     break
                 await asyncio.sleep(1.0)
@@ -385,19 +483,60 @@ class MediaFireSource(Source):
 
     # -- internos ---------------------------------------------------------------------
 
-    async def _fetch_page(self, url: str) -> _Page:
-        """Pide la página del archivo; si Cloudflare la bloquea, imita a un Chrome real."""
-        try:
-            r = await self._http.get(url, headers=PAGE_HEADERS)
-        except httpx.HTTPError as exc:
-            raise TransientError("No pude conectar con MediaFire.") from exc
-        page = _Page(r.status_code, str(r.url), r.text)
-        if _is_cloudflare_challenge(page.text):
-            return await self._fetch_page_impersonating(url)
-        return page
+    async def _fetch_page(self, url: str, *, impersonate: bool = True) -> _Page:
+        """Pide la página del archivo; si Cloudflare la bloquea, imita a un Chrome real.
+
+        Las redirecciones se siguen a mano para enviar ``Referer`` y
+        ``Sec-Fetch-Site: same-origin`` en el salto. ``httpx`` no los añade y
+        MediaFire/Cloudflare puede responder 403 a ``?action=check`` por eso.
+        """
+        current = url
+        referer: str | None = None
+        for _ in range(5):
+            headers = dict(PAGE_HEADERS)
+            if referer:
+                headers["Referer"] = referer
+                headers["Sec-Fetch-Site"] = "same-origin"
+            try:
+                r = await self._http.get(current, headers=headers, follow_redirects=False)
+            except httpx.HTTPError as exc:
+                raise TransientError("No pude conectar con MediaFire.") from exc
+            page = _Page(r.status_code, str(r.url), r.text)
+            location = r.headers.get("location")
+            if page.status in (301, 302, 303, 307, 308) and location:
+                referer = str(r.url)
+                current = urljoin(current, location)
+                continue
+            if impersonate and _is_cloudflare_challenge(page.text):
+                return await self._fetch_page_impersonating(current, referer=referer)
+            return page
+        raise TransientError("MediaFire redirigió demasiadas veces.")
+
+    async def _fetch_page_best(self, url: str) -> _Page:
+        """Prueba varias rutas con httpx y deja ``curl_cffi`` para el final."""
+        candidates = page_candidates(url)
+        last_page: _Page | None = None
+        last_usable: _Page | None = None
+        last_error: TransientError | None = None
+        for candidate in candidates:
+            try:
+                page = await self._fetch_page(candidate, impersonate=False)
+            except TransientError as exc:
+                last_error = exc
+                continue
+            last_page = page
+            if not _is_cloudflare_challenge(page.text):
+                last_usable = page
+                if page.status < 400:
+                    return page
+        if last_usable is not None:
+            return last_usable
+        if last_page is None:
+            raise last_error or TransientError("No pude conectar con MediaFire.")
+        return await self._fetch_page(canonical_page(url), impersonate=True)
 
     @staticmethod
-    async def _fetch_page_impersonating(url: str) -> _Page:
+    async def _fetch_page_impersonating(url: str, referer: str | None = None) -> _Page:
         """Cloudflare valida el fingerprint TLS de httpx; curl_cffi usa el de Chrome.
 
         Se prueban varios perfiles con espera creciente. Esto ayuda cuando el bloqueo
@@ -412,6 +551,9 @@ class MediaFireSource(Source):
                 "(verificación de Cloudflare). Falta la dependencia curl-cffi."
             ) from None
         headers = {"Accept-Language": "es-ES,es;q=0.9,en;q=0.8"}
+        if referer:
+            headers["Referer"] = referer
+            headers["Sec-Fetch-Site"] = "same-origin"
         last: _Page | None = None
         for attempt, profile in enumerate(_IMPERSONATE_PROFILES):
             if attempt:
@@ -436,7 +578,7 @@ class MediaFireSource(Source):
         return last
 
     async def _resolve(self, url: str) -> tuple[str, str, str, dict[str, str]]:
-        page = await self._fetch_page(canonical_page(url))
+        page = await self._fetch_page_best(url)
         if _is_cloudflare_challenge(page.text):
             # Transitorio para que el bot reintente con espera; al agotarse, este mismo
             # mensaje explica que el problema es la IP del servidor, no el enlace.
@@ -456,11 +598,14 @@ class MediaFireSource(Source):
         if direct:
             # El botón normal se descarga con GET; ``pass`` solo hace falta cuando el
             # enlace lo genera la API de descarga diferida (archivos con aviso).
+            self._remember_link(final_url, direct, {})
             return direct, html, final_url, {}
         token = parse_deferred_token(html)
         if token:
             direct = await self._deferred_download(token, final_url)
-            return direct, html, final_url, parse_post_data(html)
+            post_data = parse_post_data(html)
+            self._remember_link(final_url, direct, post_data)
+            return direct, html, final_url, post_data
         message = parse_error(html) or self._unexpected_page(html)
         raise SourceError(message)
 

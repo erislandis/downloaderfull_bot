@@ -57,6 +57,112 @@ def test_mediafire_inspect_y_stream_con_reanudacion():
     asyncio.run(go())
 
 
+def test_mediafire_sigue_redireccion_con_referer_de_navegador():
+    """El 302 a ?action=check debe llevar Referer y Sec-Fetch-Site same-origin."""
+    seen = {}
+
+    def handler(req):
+        if not req.url.query:
+            return httpx.Response(
+                302,
+                headers={"Location": "/file/abc/Mi_Juego.zip/file?action=check"},
+            )
+        seen["referer"] = req.headers.get("referer")
+        seen["site"] = req.headers.get("sec-fetch-site")
+        return httpx.Response(200, text=PAGE)
+
+    async def go():
+        async with client(handler) as http:
+            src = MediaFireSource(http)
+            page = await src._fetch_page(
+                "https://www.mediafire.com/file/abc/Mi_Juego.zip/file"
+            )
+            assert page.status == 200
+            assert page.text == PAGE
+    asyncio.run(go())
+    assert seen == {
+        "referer": "https://www.mediafire.com/file/abc/Mi_Juego.zip/file",
+        "site": "same-origin",
+    }
+
+
+def test_mediafire_prueba_otra_ruta_si_la_pagina_exacta_esta_bloqueada(monkeypatch):
+    """Si ?action=check recibe el reto, se prueba la misma página sin query."""
+
+    async def fake_impersonating(url, referer=None):
+        return _Page(403, url, "<html><title>Just a moment...</title></html>")
+
+    monkeypatch.setattr(
+        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
+    )
+
+    def handler(req):
+        if req.url.host == "www.mediafire.com" and req.url.path.startswith("/file/"):
+            if req.url.query == b"action=check":
+                return httpx.Response(
+                    403, text="<html><title>Just a moment...</title></html>"
+                )
+            return httpx.Response(200, text=PAGE)
+        rng = req.headers.get("Range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+            part = BODY[start:] if rng != "bytes=0-0" else BODY[:1]
+            end = start + len(part) - 1
+            return httpx.Response(
+                206, content=part, headers={"Content-Range": f"bytes {start}-{end}/{len(BODY)}"}
+            )
+        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
+
+    async def go():
+        async with client(handler, follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            insp = await src.inspect(
+                "https://www.mediafire.com/file/abc/Mi_Juego.zip/file?action=check"
+            )
+            assert insp.files[0].name == "Mi Juego.zip"
+            assert await read_all(src.stream(insp.files[0])) == BODY
+    asyncio.run(go())
+
+
+def test_mediafire_reutiliza_el_enlace_fresco_sin_repetir_la_pagina(monkeypatch):
+    """inspect() ya obtuvo un enlace directo: stream() no debe pedir la página otra vez."""
+    pages = {"n": 0}
+
+    async def fake_impersonating(url, referer=None):
+        return _Page(403, url, "<html><title>Just a moment...</title></html>")
+
+    monkeypatch.setattr(
+        MediaFireSource, "_fetch_page_impersonating", staticmethod(fake_impersonating)
+    )
+
+    def handler(req):
+        if req.url.host == "www.mediafire.com" and req.url.path.startswith("/file/"):
+            pages["n"] += 1
+            if pages["n"] > 1:
+                return httpx.Response(
+                    403, text="<html><title>Just a moment...</title></html>"
+                )
+            return httpx.Response(200, text=PAGE)
+        rng = req.headers.get("Range")
+        if rng:
+            start = int(rng.split("=")[1].split("-")[0])
+            part = BODY[start:] if rng != "bytes=0-0" else BODY[:1]
+            end = start + len(part) - 1
+            return httpx.Response(
+                206, content=part, headers={"Content-Range": f"bytes {start}-{end}/{len(BODY)}"}
+            )
+        return httpx.Response(200, content=BODY, headers={"Content-Length": str(len(BODY))})
+
+    async def go():
+        async with client(handler, follow_redirects=True) as http:
+            src = MediaFireSource(http)
+            insp = await src.inspect("https://www.mediafire.com/file/abc/Mi_Juego.zip/file")
+            assert pages["n"] == 1
+            assert await read_all(src.stream(insp.files[0])) == BODY
+            assert pages["n"] == 1
+    asyncio.run(go())
+
+
 MALWARE_PAGE = (
     '<div class="filename">Peligroso.rar</div>'
     '<button type="button" id="deferredDownloadButton" data-security-token="tok123">'
@@ -189,7 +295,7 @@ def test_mediafire_salta_cloudflare_con_curl_cffi(monkeypatch):
     """Si httpx recibe el reto de Cloudflare, se reintenta con fingerprint de Chrome."""
     calls = {"n": 0}
 
-    async def fake_impersonating(url):
+    async def fake_impersonating(url, referer=None):
         calls["n"] += 1
         return _Page(200, url, PAGE)
 
@@ -219,13 +325,13 @@ def test_mediafire_salta_cloudflare_con_curl_cffi(monkeypatch):
             f = (await src.inspect("https://www.mediafire.com/file/abc/x.zip/file")).files[0]
             assert await read_all(src.stream(f)) == BODY
     asyncio.run(go())
-    assert calls["n"] >= 2
+    assert calls["n"] >= 1
 
 
 def test_mediafire_cloudflare_persistente_avisa_de_la_ip(monkeypatch):
     """Si el reto sigue tras imitar a Chrome, el fallo es transitorio y lo explica."""
 
-    async def fake_impersonating(url):
+    async def fake_impersonating(url, referer=None):
         return _Page(403, url, "<html><title>Just a moment...</title></html>")
 
     monkeypatch.setattr(

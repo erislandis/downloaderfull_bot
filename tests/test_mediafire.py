@@ -4,6 +4,7 @@ from app.sources.mediafire import (
     MediaFireSource,
     _is_cloudflare_challenge,
     canonical_page,
+    page_candidates,
     parse_deferred_token,
     parse_direct_url,
     parse_error,
@@ -91,6 +92,7 @@ def test_nombre_desde_html_y_desde_url():
 def test_quickkey():
     assert quickkey("https://www.mediafire.com/file/l3h0s1mttcwipdv/IDM_Final.rar/file") == "l3h0s1mttcwipdv"
     assert quickkey("https://www.mediafire.com/file_premium/abc123/x.zip/file") == "abc123"
+    assert quickkey("https://www.mediafire.com/download/abc123?action=check") == "abc123"
     assert quickkey("https://www.mediafire.com/?abc123") == "abc123"
     assert quickkey("https://www.mediafire.com/folder/xyz/Carpeta") is None
 
@@ -119,6 +121,26 @@ def test_canonical_page_quita_action_check_y_enlaces_caducados():
         "?qkey=rdle9nv3j93z9y9&dkey=0ir00kshid6"
     )
     assert canonical_page(repair) == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
+
+
+def test_page_candidates_prioriza_la_pagina_exacta_y_anade_rutas_alternativas():
+    user = (
+        "https://www.mediafire.com/file/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar/file"
+        "?action=check&dkey=0ir00kshid6&r=168"
+    )
+    candidates = page_candidates(user)
+    assert candidates[0] == (
+        "https://www.mediafire.com/file/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar/file"
+        "?action=check"
+    )
+    assert "https://www.mediafire.com/file/rdle9nv3j93z9y9/file" in candidates
+    assert "https://www.mediafire.com/download/rdle9nv3j93z9y9" in candidates
+    assert (
+        "https://www.mediafire.com/file/rdle9nv3j93z9y9/file?action=download"
+        in candidates
+    )
+    direct = "https://download2388.mediafire.com/dkey/rdle9nv3j93z9y9/UNLOCKTOOL+OFFLINE.rar"
+    assert page_candidates(direct)[0] == "https://www.mediafire.com/file/rdle9nv3j93z9y9/file"
 
 
 def test_el_enlace_de_reparacion_no_se_confunde_con_el_directo():
