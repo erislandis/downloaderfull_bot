@@ -1,202 +1,183 @@
-2026-10-31T12:54:55.999935766Z ==> Downloading cache...
-2026-10-31T12:54:56.024181422Z ==> Cloning from https://github.com/erislandis/downloaderfull_bot
-2026-10-31T12:55:01.832402341Z ==> Checking out commit cbbee051ebeae8ebe0c8afc9828104035130b577 in branch main
-2026-10-31T12:55:02.018336913Z ==> Downloaded and extracted 42 MiB cache in 5s.
-2026-10-31T12:55:02.558440231Z ==> Using Python version 3.14.8 via environment variable PYTHON_VERSION
-2026-10-31T12:55:02.558455732Z ==> Docs on specifying a Python version: https://render.com/docs/python-version
-2026-10-31T12:55:02.558541857Z ==> Installing Python version 3.14.8...
-2026-10-31T12:55:06.324545518Z ==> Using Poetry version 2.1.3 (default)
-2026-10-31T12:55:06.36344595Z ==> Docs on specifying a Poetry version: https://render.com/docs/poetry-version
-2026-10-31T12:55:06.410854146Z ==> Running build command 'pip install -r requirements.txt'...
-2026-10-31T12:55:06.75799454Z Collecting aiogram<4,>=3.31 (from -r requirements.txt (line 1))
-2026-10-31T12:55:06.75927988Z   Using cached aiogram-3.31.0-py3-none-any.whl.metadata (6.8 kB)
-2026-10-31T12:55:06.787728082Z Collecting fastapi<1,>=0.162 (from -r requirements.txt (line 2))
-2026-10-31T12:55:06.788777032Z   Using cached fastapi-0.162.0-py3-none-any.whl.metadata (26 kB)
-2026-10-31T12:55:06.80281477Z Collecting uvicorn<1,>=0.54 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:06.803809526Z   Using cached uvicorn-0.54.0-py3-none-any.whl.metadata (6.6 kB)
-2026-10-31T12:55:06.811487911Z Collecting httpx<1,>=0.28 (from -r requirements.txt (line 4))
-2026-10-31T12:55:06.812451891Z   Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
-2026-10-31T12:55:06.85698249Z Collecting curl-cffi<1,>=0.17 (from -r requirements.txt (line 6))
-2026-10-31T12:55:06.858098198Z   Using cached curl_cffi-0.17.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (18 kB)
-2026-10-31T12:55:06.911549199Z Collecting pycryptodome<5,>=4.2 (from -r requirements.txt (line 7))
-2026-10-31T12:55:06.912728169Z   Using cached pycryptodome-4.2.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (6.1 kB)
-2026-10-31T12:55:06.928617943Z Collecting telethon<2,>=1.45 (from -r requirements.txt (line 8))
-2026-10-31T12:55:06.929723639Z   Using cached telethon-1.45.0-py3-none-any.whl.metadata (4.2 kB)
-2026-10-31T12:55:06.935809668Z Collecting python-dotenv<2,>=1.2 (from -r requirements.txt (line 9))
-2026-10-31T12:55:06.936765156Z   Using cached python_dotenv-1.2.4-py3-none-any.whl.metadata (29 kB)
-2026-10-31T12:55:06.957165823Z Collecting cryptg<1,>=0.6 (from -r requirements.txt (line 10))
-2026-10-31T12:55:07.034083096Z   Downloading cryptg-0.6.0-cp314-cp314-manylinux_2_28_x86_64.whl.metadata (1.6 kB)
-2026-10-31T12:55:07.040068002Z Collecting aiofiles<26.0,>=23.2.1 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.04106004Z   Using cached aiofiles-25.1.0-py3-none-any.whl.metadata (6.3 kB)
-2026-10-31T12:55:07.378320208Z Collecting aiohttp<3.15,>=3.9.0 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.386600928Z   Downloading aiohttp-3.14.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.3 kB)
-2026-10-31T12:55:07.397225934Z Collecting certifi>=2023.7.22 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.398227328Z   Using cached certifi-2026.10.23-py3-none-any.whl.metadata (2.5 kB)
-2026-10-31T12:55:07.402163696Z Collecting magic-filter<1.1,>=1.0.12 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.403136073Z   Using cached magic_filter-1.0.12-py3-none-any.whl.metadata (1.5 kB)
-2026-10-31T12:55:07.466817005Z Collecting pydantic<2.14,>=2.4.1 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.468382617Z   Using cached pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
-2026-10-31T12:55:07.478182102Z Collecting typing-extensions<=5.0,>=4.7.0 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:07.479593568Z   Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
-2026-10-31T12:55:07.491350104Z Collecting starlette>=0.46.0 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
-2026-10-31T12:55:07.492320581Z   Using cached starlette-1.10.0-py3-none-any.whl.metadata (6.6 kB)
-2026-10-31T12:55:07.498771663Z Collecting typing-inspection>=0.4.2 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
-2026-10-31T12:55:07.499910046Z   Using cached typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
-2026-10-31T12:55:07.502826775Z Collecting annotated-doc>=0.0.2 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
-2026-10-31T12:55:07.503749732Z   Using cached annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
-2026-10-31T12:55:07.511282391Z Collecting opentelemetry-api>=1.44.0 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
-2026-10-31T12:55:07.512374594Z   Using cached opentelemetry_api-1.45.2-py3-none-any.whl.metadata (1.4 kB)
-2026-10-31T12:55:07.519434498Z Collecting click>=7.0 (from uvicorn<1,>=0.54->uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:07.520377802Z   Using cached click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
-2026-10-31T12:55:07.52385069Z Collecting h11>=0.8 (from uvicorn<1,>=0.54->uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:07.524762954Z   Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
-2026-10-31T12:55:07.535240487Z Collecting anyio (from httpx<1,>=0.28->-r requirements.txt (line 4))
-2026-10-31T12:55:07.536188556Z   Using cached anyio-4.15.1-py3-none-any.whl.metadata (4.7 kB)
-2026-10-31T12:55:07.542703695Z Collecting httpcore==1.* (from httpx<1,>=0.28->-r requirements.txt (line 4))
-2026-10-31T12:55:07.543642035Z   Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
-2026-10-31T12:55:07.549964932Z Collecting idna (from httpx<1,>=0.28->-r requirements.txt (line 4))
-2026-10-31T12:55:07.550914125Z   Using cached idna-3.20-py3-none-any.whl.metadata (7.2 kB)
-2026-10-31T12:55:07.612544756Z Collecting cffi>=2.1.1 (from curl-cffi<1,>=0.17->-r requirements.txt (line 6))
-2026-10-31T12:55:07.620454757Z   Downloading cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.5 kB)
-2026-10-31T12:55:07.626497477Z Collecting pyaes (from telethon<2,>=1.45->-r requirements.txt (line 8))
-2026-10-31T12:55:07.627514465Z   Using cached pyaes-1.6.1.tar.gz (28 kB)
-2026-10-31T12:55:07.631493566Z   Installing build dependencies: started
-2026-10-31T12:55:08.178577239Z   Installing build dependencies: finished with status 'done'
-2026-10-31T12:55:08.179153672Z   Getting requirements to build wheel: started
-2026-10-31T12:55:08.513553227Z   Getting requirements to build wheel: finished with status 'done'
-2026-10-31T12:55:08.514318476Z   Preparing metadata (pyproject.toml): started
-2026-10-31T12:55:08.684111723Z   Preparing metadata (pyproject.toml): finished with status 'done'
-2026-10-31T12:55:08.693046872Z Collecting rsa (from telethon<2,>=1.45->-r requirements.txt (line 8))
-2026-10-31T12:55:08.694145801Z   Using cached rsa-4.9.1-py3-none-any.whl.metadata (5.6 kB)
-2026-10-31T12:55:08.701542757Z Collecting aiohappyeyeballs>=2.5.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:08.702507317Z   Using cached aiohappyeyeballs-2.7.1-py3-none-any.whl.metadata (5.9 kB)
-2026-10-31T12:55:08.705837735Z Collecting aiosignal>=1.4.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:08.706814062Z   Using cached aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
-2026-10-31T12:55:08.712145787Z Collecting attrs>=17.3.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:08.713094023Z   Using cached attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
-2026-10-31T12:55:08.751546682Z Collecting frozenlist>=1.1.1 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:08.759272384Z   Downloading frozenlist-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
-2026-10-31T12:55:08.964325882Z Collecting multidict<8.0,>=4.5 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:08.97223529Z   Downloading multidict-7.2.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (6.1 kB)
-2026-10-31T12:55:09.0132864Z Collecting propcache>=0.2.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:09.021140445Z   Downloading propcache-0.5.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (25 kB)
-2026-10-31T12:55:09.183032373Z Collecting yarl<2.0,>=1.25.1 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:09.190913148Z   Downloading yarl-1.25.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (111 kB)
-2026-10-31T12:55:09.210716242Z Collecting annotated-types>=0.6.0 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:09.211689314Z   Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
-2026-10-31T12:55:09.653926365Z Collecting pydantic-core==2.46.5 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.31->-r requirements.txt (line 1))
-2026-10-31T12:55:09.661808252Z   Downloading pydantic_core-2.46.5-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
-2026-10-31T12:55:09.684915868Z Collecting httptools>=0.8.0 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:09.692614777Z   Downloading httptools-0.9.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (3.5 kB)
-2026-10-31T12:55:09.714773039Z Collecting pyyaml>=5.1 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:09.72237193Z   Downloading pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
-2026-10-31T12:55:09.744774272Z Collecting uvloop>=0.15.1 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:09.752557881Z   Downloading uvloop-0.23.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.1 kB)
-2026-10-31T12:55:09.798131131Z Collecting watchfiles>=0.20 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:09.799296155Z   Using cached watchfiles-1.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.9 kB)
-2026-10-31T12:55:09.877765206Z Collecting websockets>=13.0 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
-2026-10-31T12:55:09.885576282Z   Downloading websockets-17.4-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.3 kB)
-2026-10-31T12:55:09.897685003Z Collecting pycparser (from cffi>=2.1.1->curl-cffi<1,>=0.17->-r requirements.txt (line 6))
-2026-10-31T12:55:09.898660575Z   Using cached pycparser-3.12-py3-none-any.whl.metadata (9.7 kB)
-2026-10-31T12:55:09.919111333Z Collecting pyasn1>=0.1.3 (from rsa->telethon<2,>=1.45->-r requirements.txt (line 8))
-2026-10-31T12:55:09.920113807Z   Using cached pyasn1-0.6.5-py3-none-any.whl.metadata (8.4 kB)
-2026-10-31T12:55:09.923270174Z Using cached aiogram-3.31.0-py3-none-any.whl (859 kB)
-2026-10-31T12:55:09.924538033Z Using cached fastapi-0.162.0-py3-none-any.whl (148 kB)
-2026-10-31T12:55:09.925511707Z Using cached uvicorn-0.54.0-py3-none-any.whl (87 kB)
-2026-10-31T12:55:09.926467786Z Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
-2026-10-31T12:55:09.92751857Z Using cached curl_cffi-0.17.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (14.1 MB)
-2026-10-31T12:55:09.932907194Z Using cached pycryptodome-4.2.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.0 MB)
-2026-10-31T12:55:09.934778033Z Using cached telethon-1.45.0-py3-none-any.whl (804 kB)
-2026-10-31T12:55:09.935968304Z Using cached python_dotenv-1.2.4-py3-none-any.whl (23 kB)
-2026-10-31T12:55:09.946153087Z Downloading cryptg-0.6.0-cp314-cp314-manylinux_2_28_x86_64.whl (250 kB)
-2026-10-31T12:55:09.956242409Z Using cached aiofiles-25.1.0-py3-none-any.whl (14 kB)
-2026-10-31T12:55:09.963874265Z Downloading aiohttp-3.14.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.9 MB)
-2026-10-31T12:55:09.981392821Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.9/1.9 MB 109.8 MB/s  0:00:00
-2026-10-31T12:55:09.982391598Z Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
-2026-10-31T12:55:09.983395571Z Using cached magic_filter-1.0.12-py3-none-any.whl (11 kB)
-2026-10-31T12:55:09.990921256Z Downloading multidict-7.2.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (506 kB)
-2026-10-31T12:55:09.994727678Z Using cached pydantic-2.13.5-py3-none-any.whl (472 kB)
-2026-10-31T12:55:10.002388411Z Downloading pydantic_core-2.46.5-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
-2026-10-31T12:55:10.022746786Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 97.4 MB/s  0:00:00
-2026-10-31T12:55:10.023730167Z Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
-2026-10-31T12:55:10.031418477Z Downloading yarl-1.25.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (117 kB)
-2026-10-31T12:55:10.034058375Z Using cached aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
-2026-10-31T12:55:10.035058162Z Using cached aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
-2026-10-31T12:55:10.035962811Z Using cached annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
-2026-10-31T12:55:10.036901197Z Using cached annotated_types-0.8.0-py3-none-any.whl (13 kB)
-2026-10-31T12:55:10.037807551Z Using cached attrs-26.1.0-py3-none-any.whl (67 kB)
-2026-10-31T12:55:10.038768023Z Using cached certifi-2026.10.23-py3-none-any.whl (135 kB)
-2026-10-31T12:55:10.046352186Z Downloading cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
-2026-10-31T12:55:10.050345654Z Using cached click-8.5.0-py3-none-any.whl (125 kB)
-2026-10-31T12:55:10.058078342Z Downloading frozenlist-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
-2026-10-31T12:55:10.062132897Z Using cached h11-0.16.0-py3-none-any.whl (37 kB)
-2026-10-31T12:55:10.069650602Z Downloading httptools-0.9.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (514 kB)
-2026-10-31T12:55:10.078175982Z Using cached idna-3.20-py3-none-any.whl (69 kB)
-2026-10-31T12:55:10.079165715Z Using cached opentelemetry_api-1.45.2-py3-none-any.whl (60 kB)
-2026-10-31T12:55:10.086888307Z Downloading propcache-0.5.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (232 kB)
-2026-10-31T12:55:10.097457678Z Downloading pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (794 kB)
-2026-10-31T12:55:10.109164556Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 794.2/794.2 kB 64.5 MB/s  0:00:00
-2026-10-31T12:55:10.110129017Z Using cached starlette-1.10.0-py3-none-any.whl (80 kB)
-2026-10-31T12:55:10.111125745Z Using cached anyio-4.15.1-py3-none-any.whl (132 kB)
-2026-10-31T12:55:10.112083625Z Using cached typing_inspection-0.4.4-py3-none-any.whl (14 kB)
-2026-10-31T12:55:10.119675447Z Downloading uvloop-0.23.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
-2026-10-31T12:55:10.181303843Z    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 71.5 MB/s  0:00:00
-2026-10-31T12:55:10.182424035Z Using cached watchfiles-1.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (458 kB)
-2026-10-31T12:55:10.190349128Z Downloading websockets-17.4-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (226 kB)
-2026-10-31T12:55:10.194322177Z Using cached pycparser-3.12-py3-none-any.whl (62 kB)
-2026-10-31T12:55:10.195323366Z Using cached rsa-4.9.1-py3-none-any.whl (34 kB)
-2026-10-31T12:55:10.196268943Z Using cached pyasn1-0.6.5-py3-none-any.whl (84 kB)
-2026-10-31T12:55:10.31113142Z Building wheels for collected packages: pyaes
-2026-10-31T12:55:10.311763615Z   Building wheel for pyaes (pyproject.toml): started
-2026-10-31T12:55:10.512021261Z   Building wheel for pyaes (pyproject.toml): finished with status 'done'
-2026-10-31T12:55:10.512433305Z   Created wheel for pyaes: filename=pyaes-1.6.1-py3-none-any.whl size=26422 sha256=ef6d3c64a6cfc100216208f30fb6de5ff4fa9a3521afa69437d9242bd9f55eab
-2026-10-31T12:55:10.512530654Z   Stored in directory: /opt/render/.cache/wheels/d1/14/ec/f27d9124264441d195bbf80a3e627664f4e61220935cc39343
-2026-10-31T12:55:10.513948647Z Successfully built pyaes
-2026-10-31T12:55:10.580388646Z Installing collected packages: pyaes, websockets, uvloop, typing-extensions, pyyaml, python-dotenv, pycryptodome, pycparser, pyasn1, propcache, multidict, magic-filter, idna, httptools, h11, frozenlist, cryptg, click, certifi, attrs, annotated-types, annotated-doc, aiohappyeyeballs, aiofiles, yarl, uvicorn, typing-inspection, rsa, pydantic-core, opentelemetry-api, httpcore, cffi, anyio, aiosignal, watchfiles, telethon, starlette, pydantic, httpx, curl-cffi, aiohttp, fastapi, aiogram
-2026-10-31T12:55:14.496210313Z 
-2026-10-31T12:55:14.499088697Z Successfully installed aiofiles-25.1.0 aiogram-3.31.0 aiohappyeyeballs-2.7.1 aiohttp-3.14.5 aiosignal-1.4.0 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.15.1 attrs-26.1.0 certifi-2026.10.23 cffi-2.1.1 click-8.5.0 cryptg-0.6.0 curl-cffi-0.17.0 fastapi-0.162.0 frozenlist-1.8.0 h11-0.16.0 httpcore-1.0.9 httptools-0.9.0 httpx-0.28.1 idna-3.20 magic-filter-1.0.12 multidict-7.2.1 opentelemetry-api-1.45.2 propcache-0.5.4 pyaes-1.6.1 pyasn1-0.6.5 pycparser-3.12 pycryptodome-4.2.0 pydantic-2.13.5 pydantic-core-2.46.5 python-dotenv-1.2.4 pyyaml-6.0.3 rsa-4.9.1 starlette-1.10.0 telethon-1.45.0 typing-extensions-4.16.0 typing-inspection-0.4.4 uvicorn-0.54.0 uvloop-0.23.0 watchfiles-1.3.0 websockets-17.4 yarl-1.25.1
-2026-10-31T12:55:14.500022514Z 
-2026-10-31T12:55:14.500036088Z [notice] A new release of pip is available: 26.2.1 -> 26.2.2
-2026-10-31T12:55:14.500038051Z [notice] To update, run: pip install --upgrade pip
-2026-10-31T12:55:15.539133992Z ==> Uploading build...
-2026-10-31T12:55:23.642672017Z ==> Uploaded in 6.7s. Compression took 1.4s
-2026-10-31T12:55:23.646598637Z ==> Build successful 🎉
-2026-10-31T12:55:24.568415427Z ==> Deploying...
-2026-10-31T12:55:24.625261545Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
-2026-10-31T12:55:38.741082326Z ==> Running 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'
-2026-10-31T12:56:17.041475646Z INFO:     Started server process [59]
-2026-10-31T12:56:17.041501997Z INFO:     Waiting for application startup.
-2026-10-31T12:56:18.728481265Z 2026-10-31 12:56:18,728 INFO app.runtime: Administradores configurados: 1024944474
-2026-10-31T12:56:19.467167881Z 2026-10-31 12:56:19,466 INFO app.runtime: Webhook registrado en https://bridge-bot-i11g.onrender.com/webhook
-2026-10-31T12:56:19.467397135Z INFO:     Application startup complete.
-2026-10-31T12:56:19.467728822Z INFO:     Uvicorn running on http://0.0.0.0:10000 (Press CTRL+C to quit)
-2026-10-31T12:56:20.15263112Z INFO:     127.0.0.1:49336 - "HEAD / HTTP/1.1" 405 Method Not Allowed
-2026-10-31T12:56:24.941408812Z INFO:     10.219.27.209:59100 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:24.942688899Z INFO:     10.219.27.209:59106 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:26.06095049Z ==> Your service is live 🎉
-2026-10-31T12:56:26.121346297Z ==> 
-2026-10-31T12:56:26.124582063Z ==> ///////////////////////////////////////////////////////////
-2026-10-31T12:56:26.12703796Z ==> 
-2026-10-31T12:56:26.129237587Z ==> Available at your primary URL https://bridge-bot-i11g.onrender.com
-2026-10-31T12:56:26.132641137Z ==> 
-2026-10-31T12:56:26.135082992Z ==> ///////////////////////////////////////////////////////////
-2026-10-31T12:56:26.175027397Z INFO:     35.197.96.157:0 - "GET / HTTP/1.1" 200 OK
-2026-10-31T12:56:29.943240194Z INFO:     10.219.27.209:59112 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:34.945948265Z INFO:     10.219.27.209:55570 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:39.944350976Z INFO:     10.219.27.209:55582 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:44.943088684Z INFO:     10.219.27.209:51456 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:49.942721361Z INFO:     10.219.27.209:51460 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:54.944283091Z INFO:     10.219.27.209:43998 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:54.948393309Z INFO:     10.219.27.209:44000 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:56:59.942681173Z INFO:     10.219.27.209:44016 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:04.942987517Z INFO:     10.219.27.209:58028 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:09.947734566Z INFO:     10.219.27.209:58042 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:13.421308174Z INFO:     91.108.5.152:0 - "POST /webhook HTTP/1.1" 200 OK
-2026-10-31T12:57:14.274148208Z 2026-10-31 12:57:14,272 INFO httpx: HTTP Request: GET https://www.mediafire.com/file/rdle9nv3j93z9y9/file "HTTP/1.1 302 Found"
-2026-10-31T12:57:14.290563209Z 2026-10-31 12:57:14,290 INFO httpx: HTTP Request: GET https://www.mediafire.com/file/rdle9nv3j93z9y9/file?action=check "HTTP/1.1 403 Forbidden"
-2026-10-31T12:57:14.943867592Z INFO:     10.219.27.209:54924 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:19.943206227Z INFO:     10.219.27.209:54940 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:20.569760509Z 2026-10-31 12:57:20,569 INFO httpx: HTTP Request: GET https://www.mediafire.com/file/rdle9nv3j93z9y9/file "HTTP/1.1 302 Found"
-2026-10-31T12:57:20.583948012Z 2026-10-31 12:57:20,583 INFO httpx: HTTP Request: GET https://www.mediafire.com/file/rdle9nv3j93z9y9/file?action=check "HTTP/1.1 403 Forbidden"
-2026-10-31T12:57:24.935011542Z INFO:     10.219.27.209:59972 - "GET /healthz HTTP/1.1" 200 OK
-2026-10-31T12:57:24.94240967Z INFO:     10.219.27.209:59988 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:21:57.855060786Z ==> Downloading cache...
+2026-10-31T13:21:57.882509785Z ==> Cloning from https://github.com/erislandis/downloaderfull_bot
+2026-10-31T13:22:03.347498155Z ==> Checking out commit 7ed465184704ee21760d8903b5eaae155026f037 in branch main
+2026-10-31T13:22:04.364325938Z ==> Downloaded and extracted 53 MiB cache in 6s.
+2026-10-31T13:22:05.5037402Z ==> Using Python version 3.14.8 via environment variable PYTHON_VERSION
+2026-10-31T13:22:05.503750807Z ==> Docs on specifying a Python version: https://render.com/docs/python-version
+2026-10-31T13:22:05.503870924Z ==> Installing Python version 3.14.8...
+2026-10-31T13:22:09.84081426Z ==> Using Poetry version 2.1.3 (default)
+2026-10-31T13:22:09.883510204Z ==> Docs on specifying a Poetry version: https://render.com/docs/poetry-version
+2026-10-31T13:22:09.936860177Z ==> Running build command 'pip install -r requirements.txt'...
+2026-10-31T13:22:10.421877574Z Collecting aiogram<4,>=3.31 (from -r requirements.txt (line 1))
+2026-10-31T13:22:10.423419378Z   Using cached aiogram-3.31.0-py3-none-any.whl.metadata (6.8 kB)
+2026-10-31T13:22:10.475224002Z Collecting fastapi<1,>=0.162 (from -r requirements.txt (line 2))
+2026-10-31T13:22:10.477242383Z   Using cached fastapi-0.162.0-py3-none-any.whl.metadata (26 kB)
+2026-10-31T13:22:10.522644661Z Collecting uvicorn<1,>=0.54 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:10.524428522Z   Using cached uvicorn-0.54.0-py3-none-any.whl.metadata (6.6 kB)
+2026-10-31T13:22:10.565991446Z Collecting httpx<1,>=0.28 (from -r requirements.txt (line 4))
+2026-10-31T13:22:10.570796997Z   Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+2026-10-31T13:22:10.639806402Z Collecting curl-cffi<1,>=0.17 (from -r requirements.txt (line 6))
+2026-10-31T13:22:10.64119168Z   Using cached curl_cffi-0.17.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (18 kB)
+2026-10-31T13:22:10.706622407Z Collecting pycryptodome<5,>=4.2 (from -r requirements.txt (line 7))
+2026-10-31T13:22:10.707976673Z   Using cached pycryptodome-4.2.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (6.1 kB)
+2026-10-31T13:22:10.737235453Z Collecting telethon<2,>=1.45 (from -r requirements.txt (line 8))
+2026-10-31T13:22:10.73859619Z   Using cached telethon-1.45.0-py3-none-any.whl.metadata (4.2 kB)
+2026-10-31T13:22:10.754480534Z Collecting python-dotenv<2,>=1.2 (from -r requirements.txt (line 9))
+2026-10-31T13:22:10.75566555Z   Using cached python_dotenv-1.2.4-py3-none-any.whl.metadata (29 kB)
+2026-10-31T13:22:10.790492514Z Collecting cryptg<1,>=0.6 (from -r requirements.txt (line 10))
+2026-10-31T13:22:10.791816953Z   Using cached cryptg-0.6.0-cp314-cp314-manylinux_2_28_x86_64.whl.metadata (1.6 kB)
+2026-10-31T13:22:10.806104828Z Collecting aiofiles<26.0,>=23.2.1 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:10.807346636Z   Using cached aiofiles-25.1.0-py3-none-any.whl.metadata (6.3 kB)
+2026-10-31T13:22:11.17787429Z Collecting aiohttp<3.15,>=3.9.0 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.17925721Z   Using cached aiohttp-3.14.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.3 kB)
+2026-10-31T13:22:11.19945232Z Collecting certifi>=2023.7.22 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.200907944Z   Using cached certifi-2026.10.23-py3-none-any.whl.metadata (2.5 kB)
+2026-10-31T13:22:11.218341009Z Collecting magic-filter<1.1,>=1.0.12 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.219762803Z   Using cached magic_filter-1.0.12-py3-none-any.whl.metadata (1.5 kB)
+2026-10-31T13:22:11.319911535Z Collecting pydantic<2.14,>=2.4.1 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.321789672Z   Using cached pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
+2026-10-31T13:22:11.350489209Z Collecting typing-extensions<=5.0,>=4.7.0 (from aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.351856258Z   Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+2026-10-31T13:22:11.375819735Z Collecting starlette>=0.46.0 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
+2026-10-31T13:22:11.37713662Z   Using cached starlette-1.10.0-py3-none-any.whl.metadata (6.6 kB)
+2026-10-31T13:22:11.394869036Z Collecting typing-inspection>=0.4.2 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
+2026-10-31T13:22:11.396371842Z   Using cached typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+2026-10-31T13:22:11.409545975Z Collecting annotated-doc>=0.0.2 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
+2026-10-31T13:22:11.41082697Z   Using cached annotated_doc-0.0.5-py3-none-any.whl.metadata (6.5 kB)
+2026-10-31T13:22:11.430091105Z Collecting opentelemetry-api>=1.44.0 (from fastapi<1,>=0.162->-r requirements.txt (line 2))
+2026-10-31T13:22:11.432245003Z   Using cached opentelemetry_api-1.45.2-py3-none-any.whl.metadata (1.4 kB)
+2026-10-31T13:22:11.461380572Z Collecting click>=7.0 (from uvicorn<1,>=0.54->uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:11.462672166Z   Using cached click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
+2026-10-31T13:22:11.478588171Z Collecting h11>=0.8 (from uvicorn<1,>=0.54->uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:11.479891667Z   Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+2026-10-31T13:22:11.50955686Z Collecting anyio (from httpx<1,>=0.28->-r requirements.txt (line 4))
+2026-10-31T13:22:11.511287726Z   Using cached anyio-4.15.1-py3-none-any.whl.metadata (4.7 kB)
+2026-10-31T13:22:11.533170443Z Collecting httpcore==1.* (from httpx<1,>=0.28->-r requirements.txt (line 4))
+2026-10-31T13:22:11.535148454Z   Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+2026-10-31T13:22:11.55284401Z Collecting idna (from httpx<1,>=0.28->-r requirements.txt (line 4))
+2026-10-31T13:22:11.554097849Z   Using cached idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+2026-10-31T13:22:11.649183091Z Collecting cffi>=2.1.1 (from curl-cffi<1,>=0.17->-r requirements.txt (line 6))
+2026-10-31T13:22:11.650663294Z   Using cached cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.5 kB)
+2026-10-31T13:22:11.667161874Z Collecting pyaes (from telethon<2,>=1.45->-r requirements.txt (line 8))
+2026-10-31T13:22:11.667240581Z   Using cached pyaes-1.6.1-py3-none-any.whl
+2026-10-31T13:22:11.686309981Z Collecting rsa (from telethon<2,>=1.45->-r requirements.txt (line 8))
+2026-10-31T13:22:11.687670824Z   Using cached rsa-4.9.1-py3-none-any.whl.metadata (5.6 kB)
+2026-10-31T13:22:11.705747834Z Collecting aiohappyeyeballs>=2.5.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.707103565Z   Using cached aiohappyeyeballs-2.7.1-py3-none-any.whl.metadata (5.9 kB)
+2026-10-31T13:22:11.721817287Z Collecting aiosignal>=1.4.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.723433943Z   Using cached aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
+2026-10-31T13:22:11.740179297Z Collecting attrs>=17.3.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.741517003Z   Using cached attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+2026-10-31T13:22:11.806640504Z Collecting frozenlist>=1.1.1 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:11.808757528Z   Using cached frozenlist-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
+2026-10-31T13:22:12.075383764Z Collecting multidict<8.0,>=4.5 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:12.076747479Z   Using cached multidict-7.2.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (6.1 kB)
+2026-10-31T13:22:12.128886303Z Collecting propcache>=0.2.0 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:12.131274972Z   Using cached propcache-0.5.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (25 kB)
+2026-10-31T13:22:12.365117625Z Collecting yarl<2.0,>=1.25.1 (from aiohttp<3.15,>=3.9.0->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:12.366496057Z   Using cached yarl-1.25.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (111 kB)
+2026-10-31T13:22:12.399583241Z Collecting annotated-types>=0.6.0 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:12.400936105Z   Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+2026-10-31T13:22:12.91079888Z Collecting pydantic-core==2.46.5 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.31->-r requirements.txt (line 1))
+2026-10-31T13:22:12.912061162Z   Using cached pydantic_core-2.46.5-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+2026-10-31T13:22:12.956193997Z Collecting httptools>=0.8.0 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:12.957562711Z   Using cached httptools-0.9.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (3.5 kB)
+2026-10-31T13:22:12.98830093Z Collecting pyyaml>=5.1 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:12.989824316Z   Using cached pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.4 kB)
+2026-10-31T13:22:13.025088058Z Collecting uvloop>=0.15.1 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:13.026471523Z   Using cached uvloop-0.23.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.1 kB)
+2026-10-31T13:22:13.088310435Z Collecting watchfiles>=0.20 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:13.090893257Z   Using cached watchfiles-1.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.9 kB)
+2026-10-31T13:22:13.187208542Z Collecting websockets>=13.0 (from uvicorn[standard]<1,>=0.54->-r requirements.txt (line 3))
+2026-10-31T13:22:13.18862518Z   Using cached websockets-17.4-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.3 kB)
+2026-10-31T13:22:13.222311907Z Collecting pycparser (from cffi>=2.1.1->curl-cffi<1,>=0.17->-r requirements.txt (line 6))
+2026-10-31T13:22:13.22759932Z   Using cached pycparser-3.12-py3-none-any.whl.metadata (9.7 kB)
+2026-10-31T13:22:13.290644264Z Collecting pyasn1>=0.1.3 (from rsa->telethon<2,>=1.45->-r requirements.txt (line 8))
+2026-10-31T13:22:13.292011549Z   Using cached pyasn1-0.6.5-py3-none-any.whl.metadata (8.4 kB)
+2026-10-31T13:22:13.296173117Z Using cached aiogram-3.31.0-py3-none-any.whl (859 kB)
+2026-10-31T13:22:13.298839271Z Using cached fastapi-0.162.0-py3-none-any.whl (148 kB)
+2026-10-31T13:22:13.30064458Z Using cached uvicorn-0.54.0-py3-none-any.whl (87 kB)
+2026-10-31T13:22:13.302449391Z Using cached httpx-0.28.1-py3-none-any.whl (73 kB)
+2026-10-31T13:22:13.304208478Z Using cached curl_cffi-0.17.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (14.1 MB)
+2026-10-31T13:22:13.317827524Z Using cached pycryptodome-4.2.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.0 MB)
+2026-10-31T13:22:13.322566314Z Using cached telethon-1.45.0-py3-none-any.whl (804 kB)
+2026-10-31T13:22:13.325734926Z Using cached python_dotenv-1.2.4-py3-none-any.whl (23 kB)
+2026-10-31T13:22:13.330680267Z Using cached cryptg-0.6.0-cp314-cp314-manylinux_2_28_x86_64.whl (250 kB)
+2026-10-31T13:22:13.333224235Z Using cached aiofiles-25.1.0-py3-none-any.whl (14 kB)
+2026-10-31T13:22:13.335243718Z Using cached aiohttp-3.14.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.9 MB)
+2026-10-31T13:22:13.339018259Z Using cached httpcore-1.0.9-py3-none-any.whl (78 kB)
+2026-10-31T13:22:13.340720511Z Using cached magic_filter-1.0.12-py3-none-any.whl (11 kB)
+2026-10-31T13:22:13.341933914Z Using cached multidict-7.2.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (506 kB)
+2026-10-31T13:22:13.343643695Z Using cached pydantic-2.13.5-py3-none-any.whl (472 kB)
+2026-10-31T13:22:13.345418413Z Using cached pydantic_core-2.46.5-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+2026-10-31T13:22:13.348263863Z Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+2026-10-31T13:22:13.349481549Z Using cached yarl-1.25.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (117 kB)
+2026-10-31T13:22:13.350787429Z Using cached aiohappyeyeballs-2.7.1-py3-none-any.whl (15 kB)
+2026-10-31T13:22:13.351982365Z Using cached aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+2026-10-31T13:22:13.353153136Z Using cached annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+2026-10-31T13:22:13.354294631Z Using cached annotated_types-0.8.0-py3-none-any.whl (13 kB)
+2026-10-31T13:22:13.355480739Z Using cached attrs-26.1.0-py3-none-any.whl (67 kB)
+2026-10-31T13:22:13.356744591Z Using cached certifi-2026.10.23-py3-none-any.whl (135 kB)
+2026-10-31T13:22:13.358070054Z Using cached cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+2026-10-31T13:22:13.35954408Z Using cached click-8.5.0-py3-none-any.whl (125 kB)
+2026-10-31T13:22:13.361089213Z Using cached frozenlist-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
+2026-10-31T13:22:13.362479361Z Using cached h11-0.16.0-py3-none-any.whl (37 kB)
+2026-10-31T13:22:13.363689875Z Using cached httptools-0.9.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (514 kB)
+2026-10-31T13:22:13.365441785Z Using cached idna-3.20-py3-none-any.whl (69 kB)
+2026-10-31T13:22:13.366703502Z Using cached opentelemetry_api-1.45.2-py3-none-any.whl (60 kB)
+2026-10-31T13:22:13.367931345Z Using cached propcache-0.5.4-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (232 kB)
+2026-10-31T13:22:13.369386101Z Using cached pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (794 kB)
+2026-10-31T13:22:13.371237545Z Using cached starlette-1.10.0-py3-none-any.whl (80 kB)
+2026-10-31T13:22:13.372513196Z Using cached anyio-4.15.1-py3-none-any.whl (132 kB)
+2026-10-31T13:22:13.373851525Z Using cached typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+2026-10-31T13:22:13.375011844Z Using cached uvloop-0.23.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+2026-10-31T13:22:13.37967834Z Using cached watchfiles-1.3.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (458 kB)
+2026-10-31T13:22:13.381439003Z Using cached websockets-17.4-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (226 kB)
+2026-10-31T13:22:13.382862894Z Using cached pycparser-3.12-py3-none-any.whl (62 kB)
+2026-10-31T13:22:13.384107091Z Using cached rsa-4.9.1-py3-none-any.whl (34 kB)
+2026-10-31T13:22:13.385324921Z Using cached pyasn1-0.6.5-py3-none-any.whl (84 kB)
+2026-10-31T13:22:13.572426831Z Installing collected packages: pyaes, websockets, uvloop, typing-extensions, pyyaml, python-dotenv, pycryptodome, pycparser, pyasn1, propcache, multidict, magic-filter, idna, httptools, h11, frozenlist, cryptg, click, certifi, attrs, annotated-types, annotated-doc, aiohappyeyeballs, aiofiles, yarl, uvicorn, typing-inspection, rsa, pydantic-core, opentelemetry-api, httpcore, cffi, anyio, aiosignal, watchfiles, telethon, starlette, pydantic, httpx, curl-cffi, aiohttp, fastapi, aiogram
+2026-10-31T13:22:18.065972711Z 
+2026-10-31T13:22:18.070123588Z Successfully installed aiofiles-25.1.0 aiogram-3.31.0 aiohappyeyeballs-2.7.1 aiohttp-3.14.5 aiosignal-1.4.0 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.15.1 attrs-26.1.0 certifi-2026.10.23 cffi-2.1.1 click-8.5.0 cryptg-0.6.0 curl-cffi-0.17.0 fastapi-0.162.0 frozenlist-1.8.0 h11-0.16.0 httpcore-1.0.9 httptools-0.9.0 httpx-0.28.1 idna-3.20 magic-filter-1.0.12 multidict-7.2.1 opentelemetry-api-1.45.2 propcache-0.5.4 pyaes-1.6.1 pyasn1-0.6.5 pycparser-3.12 pycryptodome-4.2.0 pydantic-2.13.5 pydantic-core-2.46.5 python-dotenv-1.2.4 pyyaml-6.0.3 rsa-4.9.1 starlette-1.10.0 telethon-1.45.0 typing-extensions-4.16.0 typing-inspection-0.4.4 uvicorn-0.54.0 uvloop-0.23.0 watchfiles-1.3.0 websockets-17.4 yarl-1.25.1
+2026-10-31T13:22:18.071083564Z 
+2026-10-31T13:22:18.07108874Z [notice] A new release of pip is available: 26.2.1 -> 26.2.2
+2026-10-31T13:22:18.071090466Z [notice] To update, run: pip install --upgrade pip
+2026-10-31T13:22:19.566566487Z ==> Uploading build...
+2026-10-31T13:22:24.038575892Z ==> Uploaded in 3.0s. Compression took 1.5s
+2026-10-31T13:22:24.046718889Z ==> Build successful 🎉
+2026-10-31T13:22:24.86326524Z ==> Deploying...
+2026-10-31T13:22:24.944924552Z ==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-10-31T13:22:35.57033917Z ==> Running 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'
+2026-10-31T13:23:15.978804733Z INFO:     Started server process [57]
+2026-10-31T13:23:15.978841915Z INFO:     Waiting for application startup.
+2026-10-31T13:23:17.265613569Z 2026-10-31 13:23:17,264 INFO app.runtime: Administradores configurados: 1024944474
+2026-10-31T13:23:18.006756188Z 2026-10-31 13:23:18,006 INFO app.runtime: Webhook registrado en https://bridge-bot-i11g.onrender.com/webhook
+2026-10-31T13:23:18.00695734Z INFO:     Application startup complete.
+2026-10-31T13:23:18.00728733Z INFO:     Uvicorn running on http://0.0.0.0:10000 (Press CTRL+C to quit)
+2026-10-31T13:23:18.291469554Z INFO:     127.0.0.1:58640 - "HEAD / HTTP/1.1" 405 Method Not Allowed
+2026-10-31T13:23:25.259916778Z INFO:     10.219.24.179:59366 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:25.262133683Z INFO:     10.219.24.179:59376 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:25.869214055Z ==> Your service is live 🎉
+2026-10-31T13:23:25.99452382Z INFO:     35.197.96.157:0 - "GET / HTTP/1.1" 200 OK
+2026-10-31T13:23:26.018239228Z ==> 
+2026-10-31T13:23:26.026049895Z ==> ///////////////////////////////////////////////////////////
+2026-10-31T13:23:26.033521717Z ==> 
+2026-10-31T13:23:26.036732662Z ==> Available at your primary URL https://bridge-bot-i11g.onrender.com
+2026-10-31T13:23:26.03905288Z ==> 
+2026-10-31T13:23:26.042097082Z ==> ///////////////////////////////////////////////////////////
+2026-10-31T13:23:30.262861942Z INFO:     10.219.24.179:43108 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:35.264043998Z INFO:     10.219.24.179:43120 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:40.263418044Z INFO:     10.219.24.179:34456 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:45.263263297Z INFO:     10.219.24.179:34460 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:50.263485653Z INFO:     10.219.24.179:37116 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:55.259560965Z INFO:     10.219.24.179:37120 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:23:55.262752349Z INFO:     10.219.24.179:37122 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:00.263303744Z INFO:     10.219.24.179:33384 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:05.264160326Z INFO:     10.219.24.179:33390 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:10.262828335Z INFO:     10.219.24.179:43370 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:15.263711737Z INFO:     10.219.24.179:43376 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:20.267159764Z INFO:     10.219.24.179:48520 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:22.258042703Z INFO:     91.108.5.152:0 - "POST /webhook HTTP/1.1" 200 OK
+2026-10-31T13:24:22.918194558Z 2026-10-31 13:24:22,916 INFO aiogram.event: Update id=531585292 is handled. Duration 658 ms by bot id=8686939954
+2026-10-31T13:24:25.259574791Z INFO:     10.219.24.179:48522 - "GET /healthz HTTP/1.1" 200 OK
+2026-10-31T13:24:25.262139347Z INFO:     10.219.24.179:48534 - "GET /healthz HTTP/1.1" 200 OK
