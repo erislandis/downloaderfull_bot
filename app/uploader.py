@@ -2,8 +2,8 @@
 
 La Bot API de Telegram solo acepta documentos de hasta 50 MB. Para no depender de
 MTProto ni de una cuenta extra, este módulo descarga el origen **en streaming** y
-envía el resultado en partes de ``BOT_API_MAX_MB``; el usuario recibe cada parte
-como un documento independiente en el mismo chat.
+envía el resultado en partes algo menores que ``BOT_API_MAX_MB``; el usuario
+recibe cada parte como un documento independiente en el mismo chat.
 
 El archivo nunca se guarda entero: solo se mantiene en memoria la parte que se va
 a enviar (más una parte de reserva para saber si hay más de una), por lo que el
@@ -39,6 +39,12 @@ BRIDGE_PREFIX = "bridge:"
 PART_SEND_ATTEMPTS = 4
 DOWNLOAD_ATTEMPTS = 4
 DOWNLOAD_BASE_DELAY = 2.0
+# Telegram responde HTTP 413 si el cuerpo multipart supera su límite. El archivo
+# viaja dentro de un formulario, así que un trozo del tamaño exacto del límite ya
+# no cabe: se reserva margen para el envelope y para la diferencia entre "50 MB"
+# decimales y 50 MiB. Solo se aplica a límites grandes para no deformar los tests.
+UPLOAD_SAFETY_MARGIN = 3 * 1024 * 1024
+UPLOAD_MARGIN_MIN_LIMIT = 8 * 1024 * 1024
 
 ProgressCallback = Callable[[int], Awaitable[None]]
 
@@ -68,6 +74,23 @@ def part_filename(name: str, index: int) -> str:
 
 def _caption(name: str, index: int) -> str:
     return escape(f"{name} · parte {index}")
+
+
+def _chunk_size(limit: int) -> int:
+    """Tamaño efectivo de cada parte: deja sitio al envelope multipart de Telegram."""
+    if limit > UPLOAD_MARGIN_MIN_LIMIT:
+        return max(1, limit - UPLOAD_SAFETY_MARGIN)
+    return limit
+
+
+def _is_too_large(exc: BaseException) -> bool:
+    """¿El error de Telegram es el 413 por cuerpo de petición demasiado grande?
+
+    Se busca el texto del 413 y no un ``413`` suelto para no confundirlo con el
+    ``retry after 413`` de un límite de ritmo.
+    """
+    text = str(exc).lower()
+    return "entity too large" in text or "error_code\":413" in text or "413:" in text
 
 
 async def _parts(
@@ -138,7 +161,7 @@ async def _parts(
 
 
 class TelegramUploader:
-    """Descarga el origen y publica el contenido en el chat, en partes de ≤50 MB."""
+    """Descarga el origen y publica el contenido en el chat, en partes menores que el límite."""
 
     def __init__(self, settings: Settings, bot: Bot) -> None:
         self._s = settings
@@ -200,6 +223,7 @@ class TelegramUploader:
                 f"{self._s.max_file_bytes // (1024 * 1024)} MB."
             )
 
+        chunk = _chunk_size(limit)
         started = time.monotonic()
         last_read = started
         downloaded = 0
@@ -207,7 +231,7 @@ class TelegramUploader:
         self._current_task = asyncio.current_task()
         try:
             async for index, data, _last, multi in _parts(
-                source, remote, limit, self._s.max_file_bytes, on_progress
+                source, remote, chunk, self._s.max_file_bytes, on_progress
             ):
                 last_read = time.monotonic()
                 filename = part_filename(remote.name, index) if multi else remote.name
@@ -248,12 +272,18 @@ class TelegramUploader:
                     **kwargs,
                 )
                 return
-            except TelegramRetryAfter as exc:
-                last = exc
-                await asyncio.sleep(max(float(exc.retry_after), 1.0))
-            except TelegramNetworkError as exc:
-                last = exc
-                await asyncio.sleep(DOWNLOAD_BASE_DELAY * (attempt + 1))
             except TelegramAPIError as exc:
-                raise UploadError(f"Telegram rechazó «{filename}»: {exc}") from exc
+                if _is_too_large(exc):
+                    raise UploadError(
+                        f"Telegram rechazó «{filename}» por tamaño (HTTP 413): el cuerpo "
+                        "multipart supera el límite. Reduce BOT_API_MAX_MB para dejar margen."
+                    ) from exc
+                if isinstance(exc, TelegramRetryAfter):
+                    last = exc
+                    await asyncio.sleep(max(float(exc.retry_after), 1.0))
+                elif isinstance(exc, TelegramNetworkError):
+                    last = exc
+                    await asyncio.sleep(DOWNLOAD_BASE_DELAY * (attempt + 1))
+                else:
+                    raise UploadError(f"Telegram rechazó «{filename}»: {exc}") from exc
         raise UploadError(f"No pude enviar «{filename}» a Telegram: {last}")
